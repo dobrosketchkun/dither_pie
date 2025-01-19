@@ -1,0 +1,318 @@
+[
+     {
+        "name": "gb_dmg_palette",
+        "colors": [
+            "#0f381f",  
+            "#304e2a",
+            "#8bac0f",
+            "#9bce0f"
+        ]
+    },
+    {
+        "name": "gb_pocket_palette",
+        "colors": [
+            "#000000",  
+            "#555555",
+            "#aaaaaa",
+            "#ffffff"
+        ]
+    },
+    {
+        "name": "gb_light_palette",
+        "colors": [
+            "#111111",  
+            "#596259",
+            "#9da89d",
+            "#cfdcdc"
+        ]
+    },
+    {
+        "name": "cga_palette1",
+        "colors": [
+            "#000000",  
+            "#55ffff",
+            "#ff55ff",
+            "#ffffff"
+        ]
+    },
+    {
+        "name": "cga_palette2",
+        "colors": [
+            "#000000",  
+            "#55ff55",
+            "#ff5555",
+            "#ffff55"
+        ]
+    },
+    {
+        "name": "zx_palette",
+        "colors": [
+            "#000000",  
+            "#0000d7",  
+            "#d70000",  
+            "#d700d7",  
+            "#00d700",  
+            "#00d7d7",  
+            "#d7d700",  
+            "#d7d7d7",  
+            "#0000ff",  
+            "#ff0000",  
+            "#ff00ff",  
+            "#00ff00",  
+            "#00ffff",  
+            "#ffff00",  
+            "#ffffff"   
+        ]
+    },
+    {
+        "name": "c64_palette",
+        "colors": [
+            "#000000",  
+            "#ffffff",  
+            "#880000",  
+            "#aaffee",  
+            "#cc44cc",  
+            "#00cc55",  
+            "#0000aa",  
+            "#e6e600",  
+            "#dd8855",  
+            "#664400",  
+            "#ff7777",  
+            "#333333",  
+            "#777777",  
+            "#aaff66",  
+            "#00aaff",  
+            "#bbbbbb"   
+        ]
+    },
+    {
+        "name": "pico8_palette",
+        "colors": [
+            "#000000",  
+            "#5f574f",  
+            "#c2c3c7",  
+            "#fff1e8",  
+            "#ff004d",  
+            "#ffa300",  
+            "#ffec27",  
+            "#00e436",  
+            "#29adff",  
+            "#83769c",  
+            "#ff77a8",  
+            "#ffccaa",  
+            "#1d2b53",  
+            "#7e253b",  
+            "#008751",  
+            "#ab5236"   
+        ]
+    },
+    {
+        "name": "forest_palette",
+        "colors": [
+            "#151f15",  
+            "#2f4538",  
+            "#497b5c",  
+            "#619482",  
+            "#86b591",  
+            "#b9ceac",  
+            "#dbebcf"   
+        ]
+    },
+    {
+        "name": "sunset_palette",
+        "colors": [
+            "#191d31",  
+            "#422c48",  
+            "#733463",  
+            "#b3435e",  
+            "#e86254",  
+            "#ff943a",  
+            "#ffdb7e"   
+        ]
+    },
+    {
+        "name": "green_gameboy_4colors",
+        "colors": [
+            "#332c50",
+            "#46878f",
+            "#94e344",
+            "#e2f3e4"
+        ]
+    },
+    {
+        "name": "ice_cream_gameboy_4colors",
+        "colors": [
+            "#7c3f58",
+            "#eb6b6f",
+            "#f9a875",
+            "#fff6d3"
+        ]
+    },
+    {
+        "name": "hollow_knight_4colors",
+        "colors": [
+            "#0f0f1b",
+            "#565a75",
+            "#c6b7be",
+            "#fafbf6"
+        ]
+    },
+    {
+        "name": "nostalgia_gameboy_4colors",
+        "colors": [
+            "#d0d058",
+            "#a0a840",
+            "#708028",
+            "#405010"
+        ]
+    },
+    {
+        "name": "spacehaze_4colors",
+        "colors": [
+            "#f8e3c4",
+            "#cc3495",
+            "#6b1fb1",
+            "#0b0630"
+        ]
+    },
+    {
+        "name": "mist_4colors",
+        "colors": [
+            "#2d1b00",
+            "#1e606e",
+            "#5ab9a8",
+            "#c4f0c2"
+        ]
+    },
+    {
+        "name": "sara_PC98_16colors",
+        "colors": [
+            "b61030",
+            "#e24050",
+            "#ee7175",
+            "#f69d9d",
+            "#fffff2",
+            "#ead6aa",
+            "#daa56d",
+            "#ca713c",
+            "#ae4c30",
+            "#7d1818",
+            "#551008",
+            "#713410",
+            "#657150",
+            "#71958d",
+            "#a5baae",
+            "#1c0810"
+        ]
+    },
+    {
+        "name": "yuno_PC98_16colors",
+        "colors": [
+            "#000000",
+            "#99aabb",
+            "#ffffff",
+            "#773333",
+            "#bb7766",
+            "#eeaa99",
+            "#ffddcc",
+            "#5566cc",
+            "#bbccff",
+            "#222222",
+            "#444444",
+            "#556666",
+            "#339988",
+            "#ffbb66",
+            "#dd4455",
+            "#ff99aa"
+        ]
+    },
+    {
+        "name": "k-angle's_away_18colors",
+        "colors": [
+            "#946aa3",
+            "#8e6bff",
+            "#589adf",
+            "#14c8f9",
+            "#6adcea",
+            "#a5b0ce",
+            "#afabf3",
+            "#fe89d9",
+            "#f3bbe7",
+            "#aadcff",
+            "#8afdfe",
+            "#bafff5",
+            "#d2d2d5",
+            "#d7c5f1",
+            "#ebccf2",
+            "#dae8ff",
+            "#feecfa",
+            "#fcfeff"
+        ]
+    },
+    {
+        "name": "blessing_5colors",
+        "colors": [
+            "#74569b",
+            "#96fbc7",
+            "#f7ffae",
+            "#ffb3cb",
+            "#d8bfd8"
+        ]
+    },
+    {
+        "name": "pastel-qt_7colors",
+        "colors": [
+            "#cb8175",
+            "#e2a97e",
+            "#f0cf8e",
+            "#f6edcd",
+            "#a8c8a6",
+            "#6d8d8a",
+            "#655057"
+        ]
+    },
+    {
+        "name": "cityrink_8colors",
+        "colors": [
+            "#ffffff",
+            "#fcf660",
+            "#b2d942",
+            "#52c33f",
+            "#166e7a",
+            "#254d70",
+            "#252446",
+            "#201533"
+        ]
+    },
+    {
+        "name": "eulbink_7colors",
+        "colors": [
+            "#ffffff",
+            "#0ce6f2",
+            "#0098db",
+            "#1e579c",
+            "#203562",
+            "#252446",
+            "#201533"
+        ]
+    },
+    {
+        "name": "1bit_monitor_glow_2colors",
+        "colors": [
+            "#222323",
+            "#f0f6f0"
+        ]
+    },
+    {
+        "name": "midnight_ablaze_7colors",
+        "colors": [
+            "#ff8274",
+            "#d53c6a",
+            "#7c183c",
+            "#460e2b",
+            "#31051e",
+            "#1f0510",
+            "#130208"
+        ]
+    }
+]

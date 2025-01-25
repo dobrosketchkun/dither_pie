@@ -10,6 +10,8 @@ from sklearn.cluster import KMeans
 import math
 import os
 
+from scipy.spatial import KDTree
+
 # -------------------- Enumerations and Utilities --------------------
 
 class DitherMode(Enum):
@@ -126,62 +128,73 @@ class ImageDitherer:
         self.palette = palette
         self.threshold_matrix = DitherUtils.get_threshold_matrix(dither_mode)
 
-    def find_nearest_color(self, color: Tuple[int, int, int]) -> Tuple[int, int, int]:
-        """Find the nearest color in the palette"""
-        return min(self.palette, 
-                  key=lambda p: ColorReducer.get_color_distance(color, p))
-
     def apply_dithering(self, image: Image.Image) -> Image.Image:
-        """Apply dithering to the image"""
-        # Generate palette if not provided
+        """Apply dithering to the image using KD-Tree + vectorized approach."""
+        # 1) Generate palette if not provided
         if self.palette is None:
             self.palette = ColorReducer.reduce_colors(image, self.num_colors)
-        
-        # Convert image to RGB
-        image = image.convert('RGB')
-        width, height = image.size
-        result = Image.new('RGB', (width, height))
-        
-        # Get matrix dimensions for tiling
-        matrix = self.threshold_matrix
-        matrix_height, matrix_width = matrix.shape
-        
-        pixels = list(image.getdata())
-        for y in range(height):
-            for x in range(width):
-                # Get original color
-                idx = y * width + x
-                old_color = pixels[idx]
-                
-                # Get threshold from dither matrix
-                threshold = matrix[y % matrix_height, x % matrix_width]
-                
-                # Find nearest color in palette
-                nearest = self.find_nearest_color(old_color)
-                
-                # Find second nearest color for dithering
-                palette_without_nearest = [c for c in self.palette if c != nearest]
-                if not palette_without_nearest:
-                    second_nearest = nearest
-                else:
-                    second_nearest = min(palette_without_nearest,
-                                       key=lambda p: ColorReducer.get_color_distance(old_color, p))
-                
-                # Calculate how close we are to the nearest color
-                dist_nearest = ColorReducer.get_color_distance(old_color, nearest)
-                dist_second = ColorReducer.get_color_distance(old_color, second_nearest)
-                total_dist = dist_nearest + dist_second
-                
-                if total_dist == 0:
-                    factor = 0
-                else:
-                    factor = dist_nearest / total_dist
-                
-                # Apply dithering
-                final_color = nearest if factor <= threshold else second_nearest
-                result.putpixel((x, y), final_color)
-        
-        return result
+
+        # Convert image to array
+        img_rgb = image.convert('RGB')
+        arr = np.array(img_rgb, dtype=np.uint8)
+        h, w, _ = arr.shape
+
+        # Build KDTree for the palette (convert to float32)
+        palette_arr = np.array(self.palette, dtype=np.float32)
+        tree = KDTree(palette_arr)
+
+        # Flatten pixels to shape (N,3)
+        flat_pixels = arr.reshape((-1, 3)).astype(np.float32)
+
+        if self.dither_mode == DitherMode.NONE:
+            # -------------------- Handling DitherMode.NONE --------------------
+            # Query for the nearest neighbor only (k=1)
+            _, idx = tree.query(flat_pixels, k=1, workers=-1)
+
+            # FIX: When k=1, idx is a 1D array. Do not use idx[:, 0].
+            dithered_pixels = palette_arr[idx, :]
+
+            # Reshape back to image dimensions and convert to uint8
+            out_arr = dithered_pixels.reshape((h, w, 3)).astype(np.uint8)
+
+            # Create and return the final image
+            result = Image.fromarray(out_arr, mode='RGB')
+            return result
+        else:
+            # -------------------- Handling Dither Modes with Threshold --------------------
+            # Query for the 2 nearest neighbors (k=2)
+            distances, indices = tree.query(flat_pixels, k=2, workers=-1)
+            distances_sq = distances ** 2  # Squared distances
+
+            dist_nearest = distances_sq[:, 0]
+            dist_second = distances_sq[:, 1]
+
+            # Compute the dithering factor = dist_nearest / (dist_nearest + dist_second)
+            total_dist = dist_nearest + dist_second
+            factor = np.where(total_dist == 0, 0.0, dist_nearest / total_dist)
+
+            # Tile the threshold matrix to match image dimensions
+            th_mat = self.threshold_matrix
+            th_h, th_w = th_mat.shape
+            tiled_threshold = np.tile(th_mat, ((h + th_h - 1) // th_h, (w + th_w - 1) // th_w))
+            tiled_threshold = tiled_threshold[:h, :w]
+            flat_threshold = tiled_threshold.flatten()
+
+            # Decide whether to use the nearest or second-nearest palette color
+            idx_nearest = indices[:, 0]
+            idx_second = indices[:, 1]
+            use_nearest = (factor <= flat_threshold)
+            final_indices = np.where(use_nearest, idx_nearest, idx_second).astype(np.int32)
+
+            # Gather the final palette colors
+            dithered_pixels = palette_arr[final_indices, :]
+
+            # Reshape back to image dimensions and convert to uint8
+            out_arr = dithered_pixels.reshape((h, w, 3)).astype(np.uint8)
+
+            # Create and return the final image
+            result = Image.fromarray(out_arr, mode='RGB')
+            return result
 
 # -------------------- Image Viewer --------------------
 
@@ -225,6 +238,9 @@ class ZoomableImage(tk.Canvas):
         if not self.original_image:
             return
             
+        # Ensure the canvas size is updated
+        self.update_idletasks()
+
         # Get canvas size
         canvas_width = self.winfo_width()
         canvas_height = self.winfo_height()
@@ -238,6 +254,10 @@ class ZoomableImage(tk.Canvas):
         
         # Use smaller ratio to fit image entirely
         self.zoom_factor = min(width_ratio, height_ratio)
+
+        # Reset offset to center the image
+        self.offset_x = 0
+        self.offset_y = 0
         
         self.update_view()
 
@@ -292,13 +312,15 @@ class ZoomableImage(tk.Canvas):
             self.zoom_factor *= 1.1
             
         # Limit zoom range
-        self.zoom_factor = max(0.1, min(5.0, self.zoom_factor))
+        self.zoom_factor = max(0.01, min(30.0, self.zoom_factor))
         
         self.update_view()
 
     def on_resize(self, event):
         """Handle window resize events"""
-        self.update_view()
+        self.fit_to_window()
+
+
 
 # -------------------- Palette Preview --------------------
 

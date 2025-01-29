@@ -339,23 +339,35 @@ class PaletteDialog(ctk.CTkToplevel):
         # Add palette options
         self.create_palette_options()
 
+        # Frame for the three buttons (horizontal layout)
+        self.custom_buttons_frame = ctk.CTkFrame(self)
+        self.custom_buttons_frame.pack(pady=10, fill="x")
+
         # Create Custom Palette button
         self.create_custom_palette_button = ctk.CTkButton(
-            self,
+            self.custom_buttons_frame,
             text="Create Custom Palette",
             command=self.create_custom_palette
         )
-        self.create_custom_palette_button.pack(pady=10)
+        self.create_custom_palette_button.pack(side="left", padx=5, fill="x", expand=True)
 
         # Import from lospec.com button
         self.import_palette_button = ctk.CTkButton(
-            self,
+            self.custom_buttons_frame,
             text="Import from lospec.com",
             command=self.import_from_lospec
         )
-        self.import_palette_button.pack(pady=5)
+        self.import_palette_button.pack(side="left", padx=5, fill="x", expand=True)
 
-        # Buttons
+        # Create from Image button
+        self.create_from_image_button = ctk.CTkButton(
+            self.custom_buttons_frame,
+            text="Create from Image",
+            command=self.create_palette_from_image
+        )
+        self.create_from_image_button.pack(side="left", padx=5, fill="x", expand=True)
+
+        # Buttons (OK/Cancel)
         self.button_frame = ctk.CTkFrame(self)
         self.button_frame.pack(fill="x", padx=10, pady=5)
 
@@ -380,8 +392,8 @@ class PaletteDialog(ctk.CTkToplevel):
         median_cut = ColorReducer.reduce_colors(self.image, num_colors)
         palettes.append(("Median Cut", median_cut))
 
-        kmeans1 = self.generate_kmeans_palette(num_colors, random_state=42)
-        kmeans2 = self.generate_kmeans_palette(num_colors, random_state=123)
+        kmeans1 = self.generate_kmeans_palette(self.image, num_colors, random_state=42)
+        kmeans2 = self.generate_kmeans_palette(self.image, num_colors, random_state=123)
         palettes.append(("K-means (Variant 1)", kmeans1))
         palettes.append(("K-means (Variant 2)", kmeans2))
 
@@ -389,8 +401,8 @@ class PaletteDialog(ctk.CTkToplevel):
         palettes.append(("Uniform", uniform_palette))
         return palettes
 
-    def generate_kmeans_palette(self, num_colors, random_state=42) -> List[Tuple[int, int, int]]:
-        img_array = np.array(self.image.convert('RGB'))
+    def generate_kmeans_palette(self, image: Image.Image, num_colors, random_state=42) -> List[Tuple[int, int, int]]:
+        img_array = np.array(image.convert('RGB'))
         pixels = img_array.reshape(-1, 3)
         if len(pixels) > 10000:
             indices = np.random.choice(len(pixels), 10000, replace=False)
@@ -443,6 +455,89 @@ class PaletteDialog(ctk.CTkToplevel):
 
     def create_custom_palette(self):
         CustomPaletteCreator(self, self.custom_palettes, self.save_callback, self.refresh_palettes)
+
+    def create_palette_from_image(self):
+        """
+        Prompt user to open another image and generate a K-means(Variant 1) palette
+        from it. Then show a preview dialog to confirm or pick another image again.
+        """
+        file_path = filedialog.askopenfilename(
+            parent=self,
+            filetypes=[("Image files", "*.png *.jpg *.jpeg *.gif *.bmp"), ("All files", "*.*")]
+        )
+        if not file_path:
+            return  # user canceled
+
+        # Load the image
+        try:
+            new_image = Image.open(file_path)
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to open image:\n{e}", parent=self)
+            return
+
+        # Get number of colors from parent's entry
+        try:
+            desired_colors = int(self.master.colors_entry.get())
+            if desired_colors <= 0:
+                raise ValueError
+        except ValueError:
+            desired_colors = 16
+
+        # Count how many unique colors are in this image
+        arr_full = np.array(new_image.convert('RGB'))
+        all_pixels = arr_full.reshape(-1, 3)
+        unique_pixels = np.unique(all_pixels, axis=0)
+        unique_count = unique_pixels.shape[0]
+
+        # If unique colors < desired, reduce
+        if unique_count < desired_colors:
+            num_colors = unique_count
+        else:
+            num_colors = desired_colors
+
+        # We can't have < 1 cluster
+        if num_colors < 1:
+            num_colors = 1
+
+        # Now, for K-means we might still do a random sample to keep it fast
+        if len(all_pixels) > 10000:
+            indices = np.random.choice(len(all_pixels), 10000, replace=False)
+            pixels = all_pixels[indices]
+        else:
+            pixels = all_pixels
+
+        # Perform K-means
+        kmeans = KMeans(n_clusters=num_colors, random_state=42)
+        kmeans.fit(pixels)
+        centers = kmeans.cluster_centers_.astype(int)
+        kmeans_palette = [tuple(c) for c in centers]
+
+        # Show a small preview dialog: "Use This Palette" or "Choose Another Image"
+        preview_dialog = PaletteImagePreviewDialog(self, kmeans_palette, file_path, used_clusters=num_colors)
+        self.wait_window(preview_dialog)
+
+        # Check what user decided
+        if preview_dialog.choose_another:
+            # user wants to pick another image, so just re-run
+            self.create_palette_from_image()
+            return
+        elif preview_dialog.use_result:
+            # Insert a name for reference. 
+            # We won't do an extra name prompt. We'll auto-name it.
+            basename = os.path.basename(file_path)
+            # palette_name = f"KMeans from {basename}"
+            palette_name = f"From imported image"
+
+            # Remove any old palette with the same name to avoid duplication
+            self.palettes = [(n, p) for (n, p) in self.palettes if n != palette_name]
+
+            # Insert the new one at the front
+            self.palettes.insert(0, (palette_name, kmeans_palette))
+
+            # Re-create the palette radio buttons so we can see the newly added palette
+            self.create_palette_options()
+            # Select it immediately
+            self.selected_var.set(palette_name)
 
     def refresh_palettes(self):
         self.palettes = self.generate_palettes()
@@ -518,6 +613,56 @@ class PaletteDialog(ctk.CTkToplevel):
         hex_code = hex_code.lstrip('#')
         return tuple(int(hex_code[i:i+2], 16) for i in (0, 2, 4))
 
+# -------------------- New PaletteImagePreviewDialog --------------------
+
+class PaletteImagePreviewDialog(ctk.CTkToplevel):
+    """
+    A small Toplevel to show the newly generated palette from an image
+    and ask the user if they want to use it or pick another image.
+    """
+    def __init__(self, parent, palette: List[Tuple[int,int,int]], file_path: str, used_clusters: int):
+        super().__init__(parent)
+        self.title("New Palette Preview")
+        self.geometry("400x180")
+        self.resizable(False, False)
+
+        # Flags for the user's choice
+        self.use_result = False
+        self.choose_another = False
+
+        # Modal
+        self.transient(parent)
+        self.grab_set()
+        self.lift()
+        self.focus_force()
+
+        basename = os.path.basename(file_path)
+        info_label = ctk.CTkLabel(
+            self,
+            text=f"Generated a {used_clusters}-color palette from:\n{basename}\n\nUse this palette or pick another image?"
+        )
+        info_label.pack(pady=(10,0))
+
+        self.preview = PalettePreview(self, palette, width=300, height=30)
+        self.preview.pack(pady=10)
+
+        button_frame = ctk.CTkFrame(self)
+        button_frame.pack(pady=5, fill="x")
+
+        use_button = ctk.CTkButton(button_frame, text="Use This Palette", command=self.use_palette)
+        use_button.pack(side="left", expand=True, fill="x", padx=5, pady=5)
+
+        another_button = ctk.CTkButton(button_frame, text="Choose Another Image", command=self.pick_another)
+        another_button.pack(side="right", expand=True, fill="x", padx=5, pady=5)
+
+    def use_palette(self):
+        self.use_result = True
+        self.destroy()
+
+    def pick_another(self):
+        self.choose_another = True
+        self.destroy()
+
 # -------------------- New HSV Color Picker Dialog --------------------
 
 import colorsys
@@ -526,8 +671,8 @@ PLANE_SIZE = 256  # For saturation/value plane
 
 class HSVColorPickerDialog(ctk.CTkToplevel):
     """
-    A modal dialog that provides an HSV color picker. 
-    The user can press "OK" to confirm the selection, 
+    A modal dialog that provides an HSV color picker.
+    The user can press "OK" to confirm the selection,
     and the chosen color is stored in self.selected_color as (R, G, B).
     """
     def __init__(self, parent):
@@ -639,7 +784,8 @@ class HSVColorPickerDialog(ctk.CTkToplevel):
     def update_preview(self):
         r, g, b = self.get_rgb()
         hex_color = "#{:02x}{:02x}{:02x}".format(r, g, b)
-        self.preview_box.configure(fg_color=hex_color)
+        if hasattr(self, 'preview_box'):
+            self.preview_box.configure(fg_color=hex_color)
 
     def update_circle(self):
         if self.plane_photo is None:
@@ -713,6 +859,7 @@ class HSVColorPickerDialog(ctk.CTkToplevel):
         self.preview_box.grid(row=2, column=1, padx=5, pady=(10,5), sticky="w")
 
     def get_rgb(self) -> Tuple[int, int, int]:
+        import colorsys
         r, g, b = colorsys.hsv_to_rgb(self.hue/360.0, self.sat, self.val)
         return (int(r*255), int(g*255), int(b*255))
 
@@ -752,6 +899,7 @@ class HSVColorPickerDialog(ctk.CTkToplevel):
             r = int(hex_code[1:3], 16)
             g = int(hex_code[3:5], 16)
             b = int(hex_code[5:7], 16)
+            import colorsys
             h, s, v = colorsys.rgb_to_hsv(r/255.0, g/255.0, b/255.0)
             self.hue = h * 360
             self.sat = s

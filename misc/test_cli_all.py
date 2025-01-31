@@ -13,7 +13,7 @@ def hex_to_rgb(hex_code: str) -> Tuple[int, int, int]:
     return tuple(int(hex_code[i:i+2], 16) for i in (0, 2, 4))
 
 def load_custom_palettes(palette_file: str) -> List[Tuple[str, List[str]]]:
-    """Load custom palettes from palette.json (name plus list of hex colors)."""
+    """Load custom palettes from palette.json (name plus list of hex codes)."""
     custom_palettes = []
     if os.path.exists(palette_file):
         try:
@@ -29,18 +29,39 @@ def load_custom_palettes(palette_file: str) -> List[Tuple[str, List[str]]]:
         print(f"Info: '{palette_file}' not found. Proceeding without custom palettes.")
     return custom_palettes
 
-def get_image_paths(input_path: str) -> List[str]:
-    """Retrieve image file paths from a directory or single file."""
+def is_video_file(path: str) -> bool:
+    """Check if a file is a recognized video extension."""
+    video_exts = ('.mp4', '.mkv', '.avi', '.mov')
+    return os.path.isfile(path) and path.lower().endswith(video_exts)
+
+def is_image_file(path: str) -> bool:
+    """Check if a file is recognized image extension."""
+    img_exts = ('.png', '.jpg', '.jpeg', '.gif', '.bmp')
+    return os.path.isfile(path) and path.lower().endswith(img_exts)
+
+def get_image_or_video_paths(input_path: str) -> List[str]:
+    """
+    Retrieve file paths from a directory or single file.
+    Gathers images or video files if in directory,
+    or just returns [input_path] if single file.
+    """
     if os.path.isfile(input_path):
-        return [input_path]
+        # Single file. Check if it's either image or video:
+        if is_video_file(input_path) or is_image_file(input_path):
+            return [input_path]
+        else:
+            raise FileNotFoundError(
+                f"Input path '{input_path}' is neither a recognized image nor video extension."
+            )
     elif os.path.isdir(input_path):
-        # Supported image extensions
-        supported_ext = ('.png', '.jpg', '.jpeg', '.gif', '.bmp')
-        image_files = [
-            os.path.join(input_path, f) for f in os.listdir(input_path)
-            if f.lower().endswith(supported_ext)
-        ]
-        return image_files
+        # Collect both images and videos
+        supported_exts = ('.png', '.jpg', '.jpeg', '.gif', '.bmp', '.mp4', '.mkv', '.avi', '.mov')
+        file_list = []
+        for f in os.listdir(input_path):
+            full = os.path.join(input_path, f)
+            if os.path.isfile(full) and f.lower().endswith(supported_exts):
+                file_list.append(full)
+        return file_list
     else:
         raise FileNotFoundError(f"Input path '{input_path}' is neither a file nor a directory.")
 
@@ -58,13 +79,13 @@ def sanitize_filename(filename: str) -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Batch Image Dithering and Pixelization Tool using the new dither_pie.py",
+        description="Batch Image/Video Dithering and Pixelization Tool using dither_pie.py",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     parser.add_argument(
         'input_path',
         type=str,
-        help="Path to the input image file or directory containing images."
+        help="Path to a single image/video file or a directory containing images/videos."
     )
     args = parser.parse_args()
     
@@ -72,147 +93,121 @@ def main():
     palette_file = 'palette.json'
     custom_palettes = load_custom_palettes(palette_file)
     
-    # ----------------------------------------------------------------------
-    # 1) Define sets of palettes for the new CLI usage
-    #
-    # We separate these into:
-    #   - Algorithmic palettes: pass via `--algo-palette <value>`
-    #   - Custom palettes: pass via `-p <custom_palette_name>`
-    #
-    # The numbers given below (16) are simply the color count we feed to -c.
-    # ----------------------------------------------------------------------
-
-    # Algorithmic (built-in) palette "names" that map to our new `--algo-palette` usage:
+    # Algorithmic (built-in) palette "names"
     algo_palettes = [
         ("median_cut", 16),
         ("kmeans_variant1", 16),
         ("kmeans_variant2", 16),
         ("uniform", 16),
     ]
-
-    # Custom palettes (loaded from palette.json). We'll also feed -c 16, but the user might have more or fewer colors in them. 
-    # The second item in the tuple is the "number of colors" we pass to the CLI (just a default).
-    # The actual color list is in memory, but we only need the name for -p.
-    # e.g., ("gb_dmg_palette", ["#0f381f", "#304e2a", ...])
-    # We'll keep the color count as 16 for each. You could tune it if you want.
+    # Custom palettes: just name + color_count = 16 (arbitrary default)
     custom_palettes_for_cli = [(name, 16) for (name, _) in custom_palettes]
-    
-    # Combine dithering modes
+    # Dithering modes
     dithering_modes = ["none", "bayer2x2", "bayer4x4", "bayer8x8", "bayer16x16"]
     
-    # Get list of image paths
+    # Gather files
     try:
-        image_paths = get_image_paths(args.input_path)
-        if not image_paths:
-            print(f"No supported image files found in '{args.input_path}'.")
+        paths = get_image_or_video_paths(args.input_path)
+        if not paths:
+            print(f"No supported image or video files found in '{args.input_path}'.")
             return
     except Exception as e:
         print(f"Error: {e}")
         return
     
-    # Create output directory
+    # Create an output directory
     base_output_dir = 'processed_results'
     output_dir = create_output_dir(base_output_dir)
     
-    # Path to the dither_pie.py script
+    # Path to the dither_pie.py
     cli_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dither_pie.py')
     if not os.path.exists(cli_script):
         print(f"Error: '{cli_script}' not found. Ensure that 'dither_pie.py' is in the same directory.")
         return
     
-    # Prepare list of tasks
     tasks = []
-    for image_path in image_paths:
-        image_name = os.path.splitext(os.path.basename(image_path))[0]
-        sanitized_image_name = sanitize_filename(image_name)
+    for path in paths:
+        # Determine if image or video
+        is_video = is_video_file(path)
+        extension = ".mp4" if is_video else ".png"
         
-        # 1. Pixelize (simple: pixelize command, -m 640)
-        pixelized_output = os.path.join(output_dir, f"{sanitized_image_name}_pixelized.png")
+        # Get base name for outputs
+        name = os.path.splitext(os.path.basename(path))[0]
+        sname = sanitize_filename(name)
+        
+        # 1. Pixelize
+        pixelized_output = os.path.join(output_dir, f"{sname}_pixelized{extension}")
         tasks.append({
             'type': 'pixelize',
             'args': [
                 'pixelize',
-                image_path,
+                path,
                 pixelized_output,
-                '-m', '640'  # e.g., max_size
+                '-m', '640'
             ]
         })
         
-        # 2. Dither with each dithering mode, for each *algorithmic palette*
+        # 2. Dither (algorithmic + custom)
         for mode in dithering_modes:
+            # Algorithmic
             for (algo_name, color_count) in algo_palettes:
-                # Example:
-                #   python dither_pie.py dither input_image output_image
-                #       -d bayer4x4 -c 16 --algo-palette kmeans_variant1
-                dithered_output = os.path.join(
-                    output_dir,
-                    f"{sanitized_image_name}_dithered_{mode}_{sanitize_filename(algo_name)}.png"
-                )
+                outpath = os.path.join(output_dir,
+                    f"{sname}_dithered_{mode}_{sanitize_filename(algo_name)}{extension}")
                 tasks.append({
                     'type': 'dither',
                     'args': [
                         'dither',
-                        image_path,
-                        dithered_output,
+                        path,
+                        outpath,
                         '-d', mode,
                         '-c', str(color_count),
                         '--algo-palette', algo_name
                     ]
                 })
-
-        # 2b. Dither with each dithering mode, for each *custom palette*
-        for mode in dithering_modes:
+            # Custom
             for (cust_name, color_count) in custom_palettes_for_cli:
-                # Example:
-                #   python dither_pie.py dither input_image output_image
-                #       -d bayer4x4 -c 16 -p gb_dmg_palette
-                dithered_output = os.path.join(
-                    output_dir,
-                    f"{sanitized_image_name}_dithered_{mode}_{sanitize_filename(cust_name)}.png"
-                )
+                outpath = os.path.join(output_dir,
+                    f"{sname}_dithered_{mode}_{sanitize_filename(cust_name)}{extension}")
                 tasks.append({
                     'type': 'dither',
                     'args': [
                         'dither',
-                        image_path,
-                        dithered_output,
+                        path,
+                        outpath,
                         '-d', mode,
                         '-c', str(color_count),
                         '-p', cust_name
                     ]
                 })
         
-        # 3. Dither-Pixelize (both algorithmic and custom)
-        #    same approach, but use 'dither-pixelize' command
+        # 3. dither-pixelize (algorithmic + custom)
         for mode in dithering_modes:
+            # Algorithmic
             for (algo_name, color_count) in algo_palettes:
-                dither_pixelized_output = os.path.join(
-                    output_dir,
-                    f"{sanitized_image_name}_dither_pixelized_{mode}_{sanitize_filename(algo_name)}.png"
-                )
+                outpath = os.path.join(output_dir,
+                    f"{sname}_dither_pixelized_{mode}_{sanitize_filename(algo_name)}{extension}")
                 tasks.append({
                     'type': 'dither-pixelize',
                     'args': [
                         'dither-pixelize',
-                        image_path,
-                        dither_pixelized_output,
+                        path,
+                        outpath,
                         '-d', mode,
                         '-c', str(color_count),
                         '--algo-palette', algo_name,
                         '-m', '640'
                     ]
                 })
+            # Custom
             for (cust_name, color_count) in custom_palettes_for_cli:
-                dither_pixelized_output = os.path.join(
-                    output_dir,
-                    f"{sanitized_image_name}_dither_pixelized_{mode}_{sanitize_filename(cust_name)}.png"
-                )
+                outpath = os.path.join(output_dir,
+                    f"{sname}_dither_pixelized_{mode}_{sanitize_filename(cust_name)}{extension}")
                 tasks.append({
                     'type': 'dither-pixelize',
                     'args': [
                         'dither-pixelize',
-                        image_path,
-                        dither_pixelized_output,
+                        path,
+                        outpath,
                         '-d', mode,
                         '-c', str(color_count),
                         '-p', cust_name,
@@ -220,15 +215,16 @@ def main():
                     ]
                 })
     
-    # Run tasks with tqdm progress bar
+    # Run tasks with a progress bar
     with tqdm(total=len(tasks), desc="Processing Tasks") as pbar:
         for task in tasks:
             try:
-                subprocess.run([
-                    'python', cli_script
-                ] + task['args'], check=True)
+                subprocess.run(
+                    ['python', cli_script] + task['args'],
+                    check=True
+                )
             except subprocess.CalledProcessError as e:
-                print(f"Error during {task['type']} for '{task['args'][1]}': {e}")
+                print(f"\nError during {task['type']} for '{task['args'][1]}': {e}")
             pbar.update(1)
     
     print(f"\nAll processing complete. Results saved in '{output_dir}' directory.")

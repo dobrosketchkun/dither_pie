@@ -85,6 +85,33 @@ class DitherUtils:
         else:
             raise ValueError("Unsupported dither mode.")
 
+    # -------------------- NEW: Gamma Correction Methods --------------------
+    @staticmethod
+    def srgb_to_linear(c: np.ndarray) -> np.ndarray:
+        """
+        c: float32 array in [0..1], shape (...,3) or just (...).
+        Returns float32 array in linear space [0..1].
+        """
+        # piecewise transformation
+        # np.where() handles vectorized operations
+        low = (c <= 0.04045)
+        out = np.empty_like(c, dtype=np.float32)
+        out[low] = (c[low] / 12.92)
+        out[~low] = (((c[~low] + 0.055) / 1.055)**2.4)
+        return out
+
+    @staticmethod
+    def linear_to_srgb(c: np.ndarray) -> np.ndarray:
+        """
+        c: float32 array in [0..1], shape (...,3) or just (...).
+        Returns float32 array in sRGB space [0..1].
+        """
+        low = (c <= 0.0031308)
+        out = np.empty_like(c, dtype=np.float32)
+        out[low] = (c[low] * 12.92)
+        out[~low] = (1.055*(c[~low]**(1.0/2.4)) - 0.055)
+        return out
+
 # -------------------- ColorReducer --------------------
 
 class ColorReducer:
@@ -121,27 +148,58 @@ class ColorReducer:
 # -------------------- Image Ditherer --------------------
 
 class ImageDitherer:
-    def __init__(self, num_colors=16, dither_mode:DitherMode=DitherMode.BAYER4x4, palette:List[Tuple[int,int,int]]=None):
+    def __init__(self, num_colors=16, dither_mode:DitherMode=DitherMode.BAYER4x4, palette:List[Tuple[int,int,int]]=None, use_gamma:bool=False):
         self.num_colors = num_colors
         self.dither_mode = dither_mode
         self.palette = palette
+        self.use_gamma = use_gamma
         self.threshold_matrix = DitherUtils.get_threshold_matrix(dither_mode)
 
     def apply_dithering(self, image:Image.Image)->Image.Image:
-        if self.palette is None:
-            self.palette = ColorReducer.reduce_colors(image, self.num_colors)
+        """
+        If use_gamma=True, this method will:
+          - Convert sRGB -> linear (0..1)
+          - Scale up to 0..255 in linear 8-bit for palette building / indexing
+          - Dither in that linear domain
+          - Convert the final back from linear -> sRGB
+        """
+        # Convert image to array in 0..255
+        arr_srgb_8 = np.array(image.convert('RGB'), dtype=np.uint8)
 
-        arr = np.array(image.convert('RGB'), dtype=np.uint8)
-        h,w,_ = arr.shape
-        palette_arr = np.array(self.palette, dtype=np.float32)
+        if self.use_gamma:
+            # Step 1: sRGB 8-bit -> float [0..1], then to linear
+            arr_01 = arr_srgb_8.astype(np.float32)/255.0
+            arr_lin_01 = DitherUtils.srgb_to_linear(arr_01)
+            # Scale back to 0..255 but linear-luminance-coded
+            arr_lin_8 = np.clip((arr_lin_01*255.0),0,255).astype(np.uint8)
+
+            # If no palette, generate in linear domain
+            if self.palette is None:
+                # Create a temp Image from linear-coded 8-bit to pass to color reducer
+                temp_img_lin = Image.fromarray(arr_lin_8, 'RGB')
+                self.palette = ColorReducer.reduce_colors(temp_img_lin, self.num_colors)
+
+            # Now do dithering in that linear-coded 8-bit space
+            arr_for_dith = arr_lin_8
+        else:
+            # No gamma correction path
+            if self.palette is None:
+                self.palette = ColorReducer.reduce_colors(image, self.num_colors)
+            arr_for_dith = arr_srgb_8
+
+        # Build palette KDTree
+        palette_arr = np.array(self.palette, dtype=np.float32)  # 8-bit sRGB or "linear-coded" 8-bit
         tree = KDTree(palette_arr)
-        flat_pixels = arr.reshape((-1,3)).astype(np.float32)
 
+        # Flatten
+        h,w,_ = arr_for_dith.shape
+        flat_pixels = arr_for_dith.reshape((-1,3)).astype(np.float32)
+
+        # Dither logic
         if self.dither_mode == DitherMode.NONE:
             _, idx = tree.query(flat_pixels, k=1, workers=-1)
             dith_pixels = palette_arr[idx,:]
-            out_arr = dith_pixels.reshape((h,w,3)).astype(np.uint8)
-            return Image.fromarray(out_arr, 'RGB')
+            out_arr_lin_8 = dith_pixels.reshape((h,w,3)).astype(np.uint8)
         else:
             distances, indices = tree.query(flat_pixels, k=2, workers=-1)
             dist_sq = distances**2
@@ -159,8 +217,17 @@ class ImageDitherer:
             use_nearest = (factor<=flat_thresh)
             final_indices = np.where(use_nearest, idx_nearest, idx_second).astype(np.int32)
             dith_pixels = palette_arr[final_indices,:]
-            out_arr = dith_pixels.reshape((h,w,3)).astype(np.uint8)
-            return Image.fromarray(out_arr,'RGB')
+            out_arr_lin_8 = dith_pixels.reshape((h,w,3)).astype(np.uint8)
+
+        if self.use_gamma:
+            # Convert final from linear-coded 8-bit back to sRGB
+            # out_arr_lin_8 in [0..255], but linear-coded
+            out_lin_01 = out_arr_lin_8.astype(np.float32)/255.0
+            out_srgb_01 = DitherUtils.linear_to_srgb(np.clip(out_lin_01,0,1))
+            out_srgb_8 = np.clip(out_srgb_01*255.0,0,255).astype(np.uint8)
+            return Image.fromarray(out_srgb_8, 'RGB')
+        else:
+            return Image.fromarray(out_arr_lin_8, 'RGB')
 
 # -------------------- GUI: ZoomableImage --------------------
 
@@ -714,7 +781,7 @@ class HSVColorPickerDialog(ctk.CTkToplevel):
     def update_color_reps(self):
         r,g,b=self.get_rgb()
         self.r_var.set(str(r))
-        self.g_var.set(str(b))
+        self.g_var.set(str(g))
         self.b_var.set(str(b))
         self.hex_var.set(f"#{r:02x}{g:02x}{b:02x}")
 
@@ -846,7 +913,7 @@ class App(ctk.CTk):
 
         self.sidebar=ctk.CTkFrame(self,width=200)
         self.sidebar.grid(row=0,column=0,padx=10,pady=10,sticky='nsew')
-        self.sidebar.grid_rowconfigure(14,weight=1)
+        self.sidebar.grid_rowconfigure(16,weight=1)
 
         self.main_frame=ctk.CTkFrame(self)
         self.main_frame.grid(row=0,column=1,padx=10,pady=10,sticky='nsew')
@@ -898,8 +965,12 @@ class App(ctk.CTk):
         row+=1
 
         self.auto_pixelize_var=tk.BooleanVar(value=True)
-        self.auto_pixelize_check=ctk.CTkCheckBox(self.sidebar,text="Automatic Pixelization",variable=self.auto_pixelize_var,
-                                                command=self.toggle_auto_pixelization)
+        self.auto_pixelize_check=ctk.CTkCheckBox(
+            self.sidebar,
+            text="Automatic Pixelization",
+            variable=self.auto_pixelize_var,
+            command=self.toggle_auto_pixelization
+        )
         self.auto_pixelize_check.grid(row=row,column=0,padx=20,pady=(0,10),sticky='w')
         row+=1
 
@@ -916,6 +987,17 @@ class App(ctk.CTk):
         self.apply_button=ctk.CTkButton(self.sidebar,text="Apply Dithering",command=self.show_palette_dialog)
         self.apply_button.grid(row=row,column=0,padx=20,pady=10,sticky='ew')
         row+=1
+
+        # --- Gamma Correction Checkbox on one row with its text ---
+        self.use_gamma_var = tk.BooleanVar(value=False)
+        self.gamma_check = ctk.CTkCheckBox(
+            self.sidebar,
+            text="Use Gamma Correction",
+            variable=self.use_gamma_var
+        )
+        self.gamma_check.grid(row=row,column=0,padx=20,pady=(0,10),sticky='w')
+        row+=1
+        # ----------------------------------------------------------
 
         self.save_button=ctk.CTkButton(self.sidebar,text="Save Image",command=self.save_image)
         self.save_button.grid(row=row,column=0,padx=20,pady=10,sticky='ew')
@@ -936,16 +1018,17 @@ class App(ctk.CTk):
         self.random_frame_button=ctk.CTkButton(self.sidebar,text="New Random Frame",command=self.load_random_frame)
         self.random_frame_button.grid(row=row,column=0,padx=20,pady=(10,5),sticky='ew')
         row+=1
+        self.random_frame_button.grid_remove()
 
         self.apply_video_button=ctk.CTkButton(self.sidebar,text="Apply to Video",command=self.apply_to_video)
         self.apply_video_button.grid(row=row,column=0,padx=20,pady=(10,5),sticky='ew')
         row+=1
-
-        self.random_frame_button.grid_remove()
         self.apply_video_button.grid_remove()
 
-        for i in range(row,15):
+        # Let remaining rows fill
+        for i in range(row,17):
             self.sidebar.grid_rowconfigure(i,weight=1)
+
 
     def toggle_auto_pixelization(self):
         if self.auto_pixelize_var.get():
@@ -1053,7 +1136,8 @@ class App(ctk.CTk):
                 return
 
             self.current_palette_name=dlg.selected_palette_name or "UnknownPalette"
-            ditherer=ImageDitherer(num_colors=nc,dither_mode=dm,palette=dlg.selected_palette)
+            use_gamma = self.use_gamma_var.get()
+            ditherer=ImageDitherer(num_colors=nc,dither_mode=dm,palette=dlg.selected_palette,use_gamma=use_gamma)
             try:
                 self.dithered_image=ditherer.apply_dithering(self.pixelized_image)
                 self.last_used_palette=dlg.selected_palette
@@ -1065,10 +1149,6 @@ class App(ctk.CTk):
             self.fit_to_window()
 
     def pixelize_image(self, auto=False):
-        """
-        Pixelize self.current_image to a max dimension while ensuring even width & height
-        so that encoders like libx264 won't fail if dimensions end up odd.
-        """
         if not self.current_image:
             if not auto:
                 messagebox.showwarning("No Image","Please open an image (or video) first.")
@@ -1092,9 +1172,9 @@ class App(ctk.CTk):
             nh=mx
             nw=int(mx*ratio)
 
-        # -------- FIX: Ensure even dimensions --------
-        nw = (nw // 2) * 2
-        nh = (nh // 2) * 2
+        # ensure even dimension
+        nw=(nw//2)*2
+        nh=(nh//2)*2
 
         resized=self.current_image.resize((nw,nh), Image.Resampling.NEAREST)
         final=resized.convert('RGB')
@@ -1141,6 +1221,10 @@ class App(ctk.CTk):
         except:
             nc=16
         parts.append(f"{nc}colors")
+
+        # Also note gamma usage in file name if used
+        if self.use_gamma_var.get():
+            parts.append("gamma")
 
         default_filename='_'.join(parts)+".png"
 
@@ -1240,6 +1324,9 @@ class App(ctk.CTk):
             nc=16
         parts.append(f"{nc}colors")
 
+        if self.use_gamma_var.get():
+            parts.append("gamma")
+
         default_out='_'.join(parts)+".mp4"
 
         out_path=filedialog.asksaveasfilename(
@@ -1286,50 +1373,53 @@ class App(ctk.CTk):
             except:
                 dm=DitherMode.BAYER4x4
 
-            dith=ImageDitherer(num_colors=nc,dither_mode=dm,palette=palette_for_video)
+            use_gamma = self.use_gamma_var.get()
+            dith=ImageDitherer(num_colors=nc,dither_mode=dm,palette=palette_for_video,use_gamma=use_gamma)
 
             frame_files=sorted(glob.glob(os.path.join(tmp_dir,"frame_*.png")))
             total_frames=len(frame_files)
 
             for i,fpn in enumerate(frame_files,start=1):
-                frm=Image.open(fpn)
-
-                # If user turned off auto pixelize, we do the same logic with even dimension fix
-                if not self.auto_pixelize_var.get():
-                    try:
-                        mxv=int(self.max_size_entry.get())
-                    except:
-                        mxv=640
-                    ratio=frm.width/frm.height
-                    if frm.width>=frm.height:
-                        nw=mxv
-                        nh=int(mxv/ratio)
+                # ------------------ ADDED DEBUG BLOCK ------------------
+                try:
+                    # Attempt reading & dithering each frame
+                    frm=Image.open(fpn)
+                    if not self.auto_pixelize_var.get():
+                        try:
+                            mxv=int(self.max_size_entry.get())
+                        except:
+                            mxv=640
+                        ratio=frm.width/frm.height
+                        if frm.width>=frm.height:
+                            nw=mxv
+                            nh=int(mxv/ratio)
+                        else:
+                            nh=mxv
+                            nw=int(mxv*ratio)
+                        nw=(nw//2)*2
+                        nh=(nh//2)*2
+                        frm=frm.resize((nw,nh), Image.Resampling.NEAREST)
                     else:
-                        nh=mxv
-                        nw=int(mxv*ratio)
+                        ratio=frm.width/frm.height
+                        if frm.width>=frm.height:
+                            nw=640
+                            nh=int(640/ratio)
+                        else:
+                            nh=640
+                            nw=int(640*ratio)
+                        nw=(nw//2)*2
+                        nh=(nh//2)*2
+                        frm=frm.resize((nw,nh), Image.Resampling.NEAREST)
 
-                    # ensure even
-                    nw=(nw//2)*2
-                    nh=(nh//2)*2
-
-                    frm=frm.resize((nw,nh),Image.Resampling.NEAREST)
-                else:
-                    ratio=frm.width/frm.height
-                    if frm.width>=frm.height:
-                        nw=640
-                        nh=int(640/ratio)
-                    else:
-                        nh=640
-                        nw=int(640*ratio)
-
-                    # ensure even
-                    nw=(nw//2)*2
-                    nh=(nh//2)*2
-
-                    frm=frm.resize((nw,nh),Image.Resampling.NEAREST)
-
-                dimg=dith.apply_dithering(frm)
-                dimg.save(fpn)
+                    dimg=dith.apply_dithering(frm)
+                    dimg.save(fpn)
+                except Exception as e:
+                    # Print out an immediate debug message
+                    print(f"\nERROR on frame {i} / {fpn}: {e}", file=sys.stderr)
+                    # optionally remove or skip that frame:
+                    # os.remove(fpn)
+                    continue
+                # -------------------------------------------------------
 
                 prog=float(i)/total_frames
                 bar_len=30
@@ -1363,6 +1453,7 @@ class App(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Video Processing Error",f"Failed to process video:\n{e}")
 
+
 # -------------------- CLI Tool --------------------
 
 def run_cli():
@@ -1384,6 +1475,9 @@ def run_cli():
     dither_parser.add_argument('--algo-palette',type=str,choices=["median_cut","kmeans_variant1","kmeans_variant2","uniform"],default=None,
                                help='Algorithmic palette for dithering.')
     dither_parser.add_argument('-p','--palette',type=str,default=None,help='Name of custom palette (from palette.json).')
+    # NEW CLI arg
+    dither_parser.add_argument('--gamma-correction',action='store_true',
+                               help='Use gamma correction (sRGB->linear->sRGB).')
 
     dp_parser = subparsers.add_parser('dither-pixelize',help='Pixelize then dither an image/video.')
     dp_parser.add_argument('input_image',type=str,help='Path to input.')
@@ -1394,6 +1488,9 @@ def run_cli():
                            help='Algorithmic palette.')
     dp_parser.add_argument('-p','--palette',type=str,default=None,help='Name of custom palette (from palette.json).')
     dp_parser.add_argument('-m','--max-size',type=int,default=640,help='Max dimension for pixelization.')
+    # NEW CLI arg
+    dp_parser.add_argument('--gamma-correction',action='store_true',
+                           help='Use gamma correction (sRGB->linear->sRGB).')
 
     import_lospal_parser = subparsers.add_parser('import-lospal',help='Import a palette from lospec.com URL into palette.json')
     import_lospal_parser.add_argument('url',type=str,help='Full URL from lospec.com/palette-list/...')
@@ -1454,10 +1551,8 @@ def run_cli():
         else:
             nh=max_size
             nw=int(max_size*ratio)
-        # ensure even dimension
         nw=(nw//2)*2
         nh=(nh//2)*2
-
         resized=img.resize((nw,nh),Image.Resampling.NEAREST)
         return resized.convert('RGB')
 
@@ -1503,7 +1598,7 @@ def run_cli():
 
     def do_pixel_dither(input_path:str,output_path:str, do_pixel:bool, do_dither:bool,
                         mode:str, colors:int, algo_palette:Optional[str],
-                        pal_name:Optional[str], max_size:int):
+                        pal_name:Optional[str], max_size:int, use_gamma:bool=False):
         used_palette=None
         if pal_name:
             found=None
@@ -1543,8 +1638,11 @@ def run_cli():
                     shutil.rmtree(tmp_dir)
                     sys.exit(1)
 
-                if used_palette is None:
+                # If no custom palette provided, generate from first frame if needed
+                if used_palette is None and do_dither:
                     test_img=Image.open(frames[0])
+                    if do_pixel:
+                        test_img=pixelize_image_cli(test_img,max_size)
                     if algo_palette:
                         used_palette=get_algorithmic_palette_cli(test_img,algo_palette,colors)
                     else:
@@ -1555,7 +1653,7 @@ def run_cli():
                 except:
                     dmode=DitherMode.BAYER4x4
 
-                dith=ImageDitherer(colors,dmode,used_palette)
+                dith=ImageDitherer(colors,dmode,used_palette,use_gamma=use_gamma)
 
                 totalf=len(frames)
                 for i,fpth in enumerate(frames,start=1):
@@ -1575,6 +1673,7 @@ def run_cli():
 
                 print()
 
+                # Re-encode video
                 subprocess.run([
                     "ffmpeg","-y",
                     "-framerate",f"{fps:.5f}",
@@ -1603,7 +1702,7 @@ def run_cli():
             if do_pixel:
                 img=pixelize_image_cli(img,max_size)
 
-            if used_palette is None:
+            if used_palette is None and do_dither:
                 if algo_palette:
                     used_palette=get_algorithmic_palette_cli(img,algo_palette,colors)
                 else:
@@ -1614,7 +1713,7 @@ def run_cli():
             except:
                 dmode=DitherMode.BAYER4x4
 
-            dith=ImageDitherer(colors,dmode,used_palette)
+            dith=ImageDitherer(colors,dmode,used_palette,use_gamma=use_gamma)
             result= dith.apply_dithering(img) if do_dither else img
             try:
                 result.save(output_path)
@@ -1629,7 +1728,8 @@ def run_cli():
                         do_pixel=True,do_dither=False,
                         mode='none',colors=16,
                         algo_palette=None,pal_name=None,
-                        max_size=args.max_size)
+                        max_size=args.max_size,
+                        use_gamma=False)
 
     elif cmd=='dither':
         if args.algo_palette and args.palette:
@@ -1640,7 +1740,8 @@ def run_cli():
                         mode=args.mode,colors=args.colors,
                         algo_palette=args.algo_palette,
                         pal_name=args.palette,
-                        max_size=640)
+                        max_size=640,
+                        use_gamma=args.gamma_correction)
 
     elif cmd=='dither-pixelize':
         if args.algo_palette and args.palette:
@@ -1651,7 +1752,8 @@ def run_cli():
                         mode=args.mode,colors=args.colors,
                         algo_palette=args.algo_palette,
                         pal_name=args.palette,
-                        max_size=args.max_size)
+                        max_size=args.max_size,
+                        use_gamma=args.gamma_correction)
 
     elif cmd=='import-lospal':
         url=args.url
@@ -1668,11 +1770,11 @@ def run_cli():
                 sys.exit(1)
             pjson=json.loads(data)
             name=pjson['name']
-            colors=pjson['colors']
+            cols=pjson['colors']
             def hx_to_rgb(hx:str)->Tuple[int,int,int]:
                 hx=hx.lstrip('#')
                 return tuple(int(hx[i:i+2],16) for i in (0,2,4))
-            rgbc=[hx_to_rgb(f"#{c}") for c in colors]
+            rgbc=[hx_to_rgb(f"#{c}") for c in cols]
             existing_names=[n for n,_ in custom_palettes]
             if name in existing_names:
                 print(f"Error: A palette named '{name}' already exists in palette.json",file=sys.stderr)

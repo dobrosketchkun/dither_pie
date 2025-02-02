@@ -15,7 +15,8 @@ This repository provides a Python-based tool for applying different forms of **d
      - tkinter (often included by default with Python on many systems)
 2. **Run the GUI**  
    - `python dither_pie.py`
-   This launches the main application window. From there, you can open an image or video, choose dithering/pixelization options, work with palettes, and preview results interactively.
+   This launches the main application window. From there, you can open an image or video, choose dithering/pixelization options, work with palettes, and preview results interactively.  
+   - **Gamma Correction** is optional. To enable it, check the "Use Gamma Correction" box in the sidebar.
 
 ---
 
@@ -48,12 +49,14 @@ You can automate operations like pixelization, dithering, palette creation, etc.
      - Pick a dithering matrix (`bayer2x2`, `bayer4x4`, `bayer8x8`, `bayer16x16`, or `none`).
      - Choose the number of colors (`--colors 16`).
      - Provide an algorithmic palette (e.g., `--algo-palette kmeans_variant1` or `--algo-palette median_cut`).
-     - Or use a custom palette from `palette.json` via `--palette <palette_name>`.
+     - Use a custom palette from `palette.json` via `--palette <palette_name>`.
+     - **Enable gamma correction** with `--gamma-correction` (converts sRGB ↔ linear).
 
 3. **dither-pixelize**  
    - Usage example:  
      `python dither_pie.py dither-pixelize input_image output_image --mode bayer4x4 --colors 16 --max-size 320`
-   - Pixelizes and dithers the input in one go (especially convenient for videos).
+   - Pixelizes and dithers the input in one go (especially convenient for videos).  
+   - Also accepts `--gamma-correction`.
 
 4. **import-lospal**  
    - Usage example:  
@@ -64,7 +67,6 @@ You can automate operations like pixelization, dithering, palette creation, etc.
    - Usage example:  
      `python dither_pie.py create-pal-from-image my_image.jpg --colors 16 --name MyPalette`
    - Generates a new palette (via K-means) from any given image, storing it in `palette.json` for reuse.
-
 
 ---
 

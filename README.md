@@ -1,6 +1,6 @@
 # Image Dithering Tool
 
-This repository provides a Python-based tool for applying different forms of **dithering** to images (and videos), either through a **Graphical User Interface (GUI)** or via a **Command-Line Interface (CLI)**. The tool also supports **pixelization** (reducing image size with nearest-neighbor interpolation) and allows the creation and management of **custom palettes**. It now includes **video previews** demonstrating results on short clips.
+This repository provides a Python-based tool for applying different forms of `dithering` to images **and** videos, either through a **Graphical User Interface (GUI)** or via a **Command-Line Interface (CLI)**. The tool also supports **pixelization** (reducing image size with nearest-neighbor interpolation) and allows the creation and management of **custom palettes**. It supports both images and videos. 
 
 ---
 
@@ -12,11 +12,13 @@ This repository provides a Python-based tool for applying different forms of **d
      - numpy
      - scikit-learn
      - customtkinter
-     - tkinter (often included by default with Python on many systems)
+     - tkinter (often included by default on many systems)
+     - pywt (for wavelet-based dithering)
+   - If you plan to process videos, `ffmpeg` must be installed and on your system `PATH`.
 2. **Run the GUI**  
    - `python dither_pie.py`
-   This launches the main application window. From there, you can open an image or video, choose dithering/pixelization options, work with palettes, and preview results interactively.  
-   - **Gamma Correction** is optional. To enable it, check the "Use Gamma Correction" box in the sidebar.
+   This launches the main application window. From there, you can open an image or video, choose dithering/pixelization options, experiment with different dithering modes (Bayer, Blue Noise, Polka Dot, Wavelet, Adaptive Variance, Perceptual, Hybrid, etc.), work with palettes, and preview results interactively.  
+   - **Gamma Correction** is optional. To enable it, check the `Use Gamma Correction` box in the sidebar.
 
 ---
 
@@ -40,15 +42,15 @@ You can automate operations like pixelization, dithering, palette creation, etc.
 1. **pixelize**  
    - Usage example:  
      `python dither_pie.py pixelize input_image output_image --max-size 640`
-   - Resizes the image or video with nearest-neighbor interpolation to produce a pixelized (low-res) effect.
+   - Resizes the image or video using nearest-neighbor interpolation to produce a pixelized (low-res) effect.
 
 2. **dither**  
    - Usage example:  
      `python dither_pie.py dither input_image output_image --mode bayer4x4 --colors 16`
    - Applies dithering to the input image or video. Optional parameters let you:
-     - Pick a dithering matrix (`bayer2x2`, `bayer4x4`, `bayer8x8`, `bayer16x16`, or `none`).
+     - Pick a dithering mode: `none`, `bayer2x2`, `bayer4x4`, `bayer8x8`, `bayer16x16`, `riemersma`, `polka_dot`, `wavelet`, `adaptive_variance`, `perceptual`, `hybrid`.
      - Choose the number of colors (`--colors 16`).
-     - Provide an algorithmic palette (e.g., `--algo-palette kmeans_variant1` or `--algo-palette median_cut`).
+     - Provide an algorithmic palette (e.g. `--algo-palette kmeans_variant1` or `--algo-palette median_cut`).
      - Use a custom palette from `palette.json` via `--palette <palette_name>`.
      - **Enable gamma correction** with `--gamma-correction` (converts sRGB ↔ linear).
 
@@ -83,11 +85,11 @@ Below are examples of still images processed with various dithering modes and pa
 
 ## Video Previews
 
-Now, the `misc` folder includes short video demos illustrating the results of dithering/pixelization on sample clips. You can watch them below:
+The `misc` folder includes short video demos illustrating the results of pixelization and dithering on sample clips. You can watch them below:
 
-<video src="https://github.com/user-attachments/assets/51eeacd6-c3bb-4e4e-9249-bcc954649c68"></video>
-<video src="https://github.com/user-attachments/assets/f81f9e8a-4cb4-4acf-8619-96709243e227"></video>
-<video src="https://github.com/user-attachments/assets/8ba5a42c-407b-48f5-95ea-6cf6d941b219"></video>
+<video src="https://github.com/user-attachments/assets/51eeacd6-c3bb-4e4e-9249-bcc954649c68"></video>  
+<video src="https://github.com/user-attachments/assets/f81f9e8a-4cb4-4acf-8619-96709243e227"></video>  
+<video src="https://github.com/user-attachments/assets/8ba5a42c-407b-48f5-95ea-6cf6d941b219"></video>  
 
 These clips demonstrate how pixelization and different dithering modes combine to produce retro or stylized results.
 
@@ -111,5 +113,5 @@ A `palette.json` file stores user-defined palettes. Each entry has a `name` and 
 
 You can create, import, or edit palettes via:
 
-- **GUI**: Click "Apply Dithering" -> "Select Palette" -> "Create Custom Palette" or "Import from lospec.com."
-- **CLI**: Use `import-lospal` or `create-pal-from-image`, or manually edit `palette.json`.
+- **GUI**: Click `Apply Dithering` -> `Select Palette` -> `Create Custom Palette` or `Import from lospec.com.`
+- **CLI**: Use `import-lospal` or `create-pal-from-image`, or manually edit `palette.json`. 

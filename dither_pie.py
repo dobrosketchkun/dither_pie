@@ -30,6 +30,17 @@ from dithering_lib import (
     ColorReducer
 )
 
+import tempfile
+import uuid
+import ffmpeg
+import argparse
+
+
+
+import warnings
+
+# Suppress specific warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="torchvision.models._utils")
 
 # -------------------- GUI: ZoomableImage --------------------
 
@@ -871,6 +882,10 @@ class App(ctk.CTk):
         self.pixelize_button.grid(row=row, column=0, padx=20, pady=10, sticky='ew')
         row += 1
 
+        self.pixelize_button = ctk.CTkButton(self.sidebar, text="Neural pixelize", command=self.pixelize_image_ai)
+        self.pixelize_button.grid(row=row, column=0, padx=20, pady=10, sticky='ew')
+        row += 1
+
         self.reset_button = ctk.CTkButton(self.sidebar, text="Fit to Window", command=self.fit_to_window)
         self.reset_button.grid(row=row, column=0, padx=20, pady=10, sticky='ew')
         row += 1
@@ -1037,13 +1052,12 @@ class App(ctk.CTk):
 
         ratio = self.current_image.width / self.current_image.height
         if self.current_image.width >= self.current_image.height:
-            nw = mx
-            nh = int(mx / ratio)
-        else:
             nh = mx
             nw = int(mx * ratio)
+        else:
+            nw = mx
+            nh = int(mx / ratio)
 
-        # ensure even dimension
         nw = (nw // 2) * 2
         nh = (nh // 2) * 2
 
@@ -1056,8 +1070,63 @@ class App(ctk.CTk):
         self.dithered_image = None
         self.last_used_palette = None
 
+        # ---- NEW: record that we used the "regular" pixelization method ----
+        self.last_pixelization_method = "regular"
+
         if not auto:
             messagebox.showinfo("Pixelization Complete", "Image has been pixelized.")
+
+
+    def pixelize_image_ai(self, auto=False):
+        import torch
+        from models.pixelization import Model, resize_image
+
+        if not self.current_image:
+            if not auto:
+                messagebox.showwarning("No Image", "Please open an image (or video) first.")
+            return
+
+        if self.auto_pixelize_var.get() or auto:
+            mx = 640
+        else:
+            try:
+                mx = int(self.max_size_entry.get())
+                if mx <= 0:
+                    raise ValueError
+            except:
+                messagebox.showerror("Invalid Maximum Size", "Please enter a valid positive integer.")
+                return
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            temp_id = str(uuid.uuid4())
+            temp_input = os.path.join(tmpdir, f"temp_input_{temp_id}.png")
+            temp_output = os.path.join(tmpdir, f"temp_output_{temp_id}.png")
+            temp_resized_input = os.path.join(tmpdir, f"temp_resized_input_{temp_id}.png")
+
+            self.current_image.save(temp_input)
+
+            device_type = "cuda" if torch.cuda.is_available() else "cpu"
+            m = Model(device=device_type)
+            m.load()
+
+            resize_image(temp_input, temp_resized_input, mx * 4)
+            m.pixelize(temp_resized_input, temp_output)
+            resize_image(temp_output, temp_output, mx)
+
+            final_img = Image.open(temp_output).convert('RGB')
+
+        self.pixelized_image = final_img
+        self.display_state = "pixelized"
+        self.image_viewer.set_image(self.pixelized_image)
+        self.fit_to_window()
+        self.dithered_image = None
+        self.last_used_palette = None
+
+        # ---- NEW: record that we used the "neural" pixelization method ----
+        self.last_pixelization_method = "neural"
+
+        if not auto:
+            messagebox.showinfo("Pixelization Complete", "Image has been AI-pixelized.")
 
     def save_image(self):
         if self.display_state == "dithered":
@@ -1158,9 +1227,6 @@ class App(ctk.CTk):
             messagebox.showerror("Error", f"Failed to save custom palettes:\n{e}")
 
     def apply_to_video(self):
-        """
-        Extract frames from video, apply pixelization + dithering, then re-encode.
-        """
         if not self.is_video or not self.video_path:
             messagebox.showwarning("Not Video", "No video to process.")
             return
@@ -1250,43 +1316,35 @@ class App(ctk.CTk):
             dith = ImageDitherer(num_colors=nc, dither_mode=dm,
                                  palette=palette_for_video, use_gamma=use_gamma)
 
+            # Decide if the user last used neural pixelization or not.
+            # "regular" means nearest-neighbor, "neural" means AI approach
+            last_pixel_method = getattr(self, "last_pixelization_method", "regular")
+
             frame_files = sorted(glob.glob(os.path.join(tmp_dir, "frame_*.png")))
             total_frames = len(frame_files)
 
             for i, fpn in enumerate(frame_files, start=1):
                 try:
                     frm = Image.open(fpn)
-                    # pixelize if needed
+
                     if not self.auto_pixelize_var.get():
                         try:
                             mxv = int(self.max_size_entry.get())
                             if mxv <= 0: raise ValueError
                         except:
                             mxv = 640
-                        ratio = frm.width / frm.height
-                        if frm.width >= frm.height:
-                            nw = mxv
-                            nh = int(mxv / ratio)
-                        else:
-                            nh = mxv
-                            nw = int(mxv * ratio)
-                        nw = (nw//2)*2
-                        nh = (nh//2)*2
-                        frm = frm.resize((nw, nh), Image.Resampling.NEAREST)
                     else:
-                        # auto pixelize to 640
-                        ratio = frm.width / frm.height
-                        if frm.width >= frm.height:
-                            nw = 640
-                            nh = int(640 / ratio)
-                        else:
-                            nh = 640
-                            nw = int(640 * ratio)
-                        nw = (nw//2)*2
-                        nh = (nh//2)*2
-                        frm = frm.resize((nw, nh), Image.Resampling.NEAREST)
+                        mxv = 640
 
-                    # Dither
+                    # Pixelize using whichever method was last used by the user:
+                    if last_pixel_method == "neural":
+                        # same steps as pixelize_image_ai, but in a simplified way
+                        # For brevity, let's do a function call:
+                        frm = self._pixelize_frame_neural(frm, mxv)
+                    else:
+                        frm = self._pixelize_frame_regular(frm, mxv)
+
+                    # Then dither if the user had clicked "Apply dithering"
                     dimg = dith.apply_dithering(frm)
                     dimg.save(fpn)
 
@@ -1326,94 +1384,163 @@ class App(ctk.CTk):
             messagebox.showinfo("Video Complete", f"Video successfully dithered and saved to: {out_path}")
 
         except Exception as e:
+            print(f"\nFailed to process video:\n{e}")
             messagebox.showerror("Video Processing Error", f"Failed to process video:\n{e}")
+            
+
+    def compute_even_dimensions(self, orig_w: int, orig_h: int, max_size: int) -> Tuple[int, int]:
+        """
+        Compute target dimensions such that the smaller side is close to max_size and both dimensions are even.
+        This ensures that when resizing, no cropping occurs and the final dimensions are acceptable for libx264.
+        """
+        if orig_w >= orig_h:
+            # Landscape: use max_size as the target height (adjusted to be even)
+            target_h = max_size if max_size % 2 == 0 else max_size - 1
+            target_w = int(round((orig_w / orig_h) * target_h))
+            if target_w % 2 != 0:
+                target_w += 1  # Adjust upward to make it even.
+        else:
+            # Portrait: use max_size as the target width (adjusted to be even)
+            target_w = max_size if max_size % 2 == 0 else max_size - 1
+            target_h = int(round((orig_h / orig_w) * target_w))
+            if target_h % 2 != 0:
+                target_h += 1  # Adjust upward to make it even.
+        return target_w, target_h
+
+    def _pixelize_frame_regular(self, frame_pil: Image.Image, max_size: int) -> Image.Image:
+        """
+        Regular pixelization using nearest-neighbor.
+        Computes even target dimensions before resizing.
+        """
+        orig_w, orig_h = frame_pil.size
+        target_w, target_h = self.compute_even_dimensions(orig_w, orig_h, max_size)
+        resized = frame_pil.resize((target_w, target_h), Image.Resampling.NEAREST)
+        return resized.convert('RGB')
+
+    def _pixelize_frame_neural(self, frame_pil: Image.Image, max_size: int) -> Image.Image:
+        """
+        Neural pixelization using the AI model.
+        After the neural process, the final image is resized to even dimensions.
+        """
+        import torch
+        from models.pixelization import Model, resize_image
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            temp_id = str(uuid.uuid4())
+            temp_input = os.path.join(tmpdir, f"temp_input_{temp_id}.png")
+            temp_output = os.path.join(tmpdir, f"temp_output_{temp_id}.png")
+            temp_resized_input = os.path.join(tmpdir, f"temp_resized_input_{temp_id}.png")
+
+            # Save the original frame temporarily.
+            frame_pil.save(temp_input)
+
+            device_type = "cuda" if torch.cuda.is_available() else "cpu"
+            m = Model(device=device_type)
+            m.load()
+
+            # Resize for neural processing.
+            resize_image(temp_input, temp_resized_input, max_size * 4)
+            m.pixelize(temp_resized_input, temp_output)
+            
+            # Load the result and then compute even dimensions.
+            final_img = Image.open(temp_output).convert('RGB')
+            orig_w, orig_h = final_img.size
+            target_w, target_h = self.compute_even_dimensions(orig_w, orig_h, max_size)
+            final_img = final_img.resize((target_w, target_h), Image.Resampling.NEAREST)
+        return final_img
 
 
 # -------------------- CLI Tool --------------------
 
 def run_cli():
-    import argparse
-
     parser = argparse.ArgumentParser(
         description="Image Dithering Tool CLI",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter
     )
     subparsers = parser.add_subparsers(dest='command', help='Commands')
 
-    # pixelize
+    # ------------------ pixelize ------------------
     pixelize_parser = subparsers.add_parser('pixelize', help='Pixelize an image/video.')
     pixelize_parser.add_argument('input_image', type=str, help='Path to input image/video.')
     pixelize_parser.add_argument('output_image', type=str, help='Path to save pixelized result.')
     pixelize_parser.add_argument('-m', '--max-size', type=int, default=640,
                                  help='Max dimension for pixelization.')
+    pixelize_parser.add_argument('--neural', action='store_true',
+                                 help='Use neural network pixelization')
 
-    # dither
+    # ------------------ dither ------------------
     dither_parser = subparsers.add_parser('dither', help='Apply dithering to an image/video.')
     dither_parser.add_argument('input_image', type=str, help='Path to input.')
     dither_parser.add_argument('output_image', type=str, help='Path to output.')
-    dither_parser.add_argument('-d','--mode', choices=[m.value for m in DitherMode],
+    dither_parser.add_argument('-d', '--mode', choices=[m.value for m in DitherMode],
                                default='bayer4x4', help='Dither mode.')
-    dither_parser.add_argument('-c','--colors', type=int, default=16, help='Number of colors.')
+    dither_parser.add_argument('-c', '--colors', type=int, default=16, help='Number of colors.')
     dither_parser.add_argument('--algo-palette', type=str,
-                               choices=["median_cut","kmeans_variant1","kmeans_variant2","uniform"],
+                               choices=["median_cut", "kmeans_variant1", "kmeans_variant2", "uniform"],
                                default=None,
                                help='Algorithmic palette for dithering.')
-    dither_parser.add_argument('-p','--palette', type=str, default=None,
+    dither_parser.add_argument('-p', '--palette', type=str, default=None,
                                help='Name of custom palette (from palette.json).')
     dither_parser.add_argument('--gamma-correction', action='store_true',
                                help='Use gamma correction (sRGB->linear->sRGB).')
 
-    # dither-pixelize
-    dp_parser = subparsers.add_parser('dither-pixelize',
-                                      help='Pixelize then dither an image/video.')
+    # ------------------ dither-pixelize ------------------
+    dp_parser = subparsers.add_parser('dither-pixelize', help='Pixelize then dither an image/video.')
     dp_parser.add_argument('input_image', type=str, help='Path to input.')
     dp_parser.add_argument('output_image', type=str, help='Path to output.')
-    dp_parser.add_argument('-d','--mode', choices=[m.value for m in DitherMode],
+    dp_parser.add_argument('-d', '--mode', choices=[m.value for m in DitherMode],
                            default='bayer4x4', help='Dither mode.')
-    dp_parser.add_argument('-c','--colors', type=int, default=16, help='Number of colors.')
+    dp_parser.add_argument('-c', '--colors', type=int, default=16, help='Number of colors.')
     dp_parser.add_argument('--algo-palette', type=str,
-                           choices=["median_cut","kmeans_variant1","kmeans_variant2","uniform"],
+                           choices=["median_cut", "kmeans_variant1", "kmeans_variant2", "uniform"],
                            default=None, help='Algorithmic palette.')
-    dp_parser.add_argument('-p','--palette', type=str, default=None,
+    dp_parser.add_argument('-p', '--palette', type=str, default=None,
                            help='Name of custom palette (from palette.json).')
-    dp_parser.add_argument('-m','--max-size', type=int, default=640,
+    dp_parser.add_argument('-m', '--max-size', type=int, default=640,
                            help='Max dimension for pixelization.')
     dp_parser.add_argument('--gamma-correction', action='store_true',
                            help='Use gamma correction (sRGB->linear->sRGB).')
+    dp_parser.add_argument('--neural', action='store_true',
+                           help='Use neural network pixelization')
+    dp_parser.add_argument('--final-resize', type=int, default=None,
+                           help='If set, upscale/downscale final result to this size (smaller side).')
 
-    # import-lospal
+    # ------------------ import-lospal ------------------
     import_lospal_parser = subparsers.add_parser('import-lospal',
                                                  help='Import a palette from lospec.com URL into palette.json')
     import_lospal_parser.add_argument('url', type=str, help='Full URL from lospec.com/palette-list/...')
 
-    # create-pal-from-image
+    # ------------------ create-pal-from-image ------------------
     create_pal_img_parser = subparsers.add_parser('create-pal-from-image',
                                                   help='Create a palette from an image and store it in palette.json')
     create_pal_img_parser.add_argument('input_image', type=str, help='Path to the image.')
-    create_pal_img_parser.add_argument('-c','--colors', type=int, default=16,
+    create_pal_img_parser.add_argument('-c', '--colors', type=int, default=16,
                                        help='Number of colors for the generated palette.')
-    create_pal_img_parser.add_argument('-n','--name', type=str, default=None,
+    create_pal_img_parser.add_argument('-n', '--name', type=str, default=None,
                                        help='Name to store in palette.json (defaults to "FromImage").')
+
+    # ------------------ resize (separate command) ------------------
+    resize_parser = subparsers.add_parser('resize', help='Upscale/downscale an image or video (nearest-neighbor).')
+    resize_parser.add_argument('target_size', type=int, help='Desired size for the smaller dimension.')
+    resize_parser.add_argument('input_path', type=str, help='Path to the image/video.')
 
     args = parser.parse_args()
     if not args.command:
         parser.print_help()
         sys.exit(1)
 
-    # Reuse some helper code from the App:
-
-    def hex_to_rgb(hex_code:str) -> Tuple[int,int,int]:
+    def hex_to_rgb(hex_code: str) -> Tuple[int, int, int]:
         hex_code = hex_code.lstrip('#')
-        return tuple(int(hex_code[i:i+2],16) for i in (0,2,4))
+        return tuple(int(hex_code[i:i+2], 16) for i in (0, 2, 4))
 
-    def rgb_to_hex(rgb:Tuple[int,int,int]) -> str:
+    def rgb_to_hex(rgb: Tuple[int, int, int]) -> str:
         return f"#{rgb[0]:02x}{rgb[1]:02x}{rgb[2]:02x}"
 
-    def load_custom_palettes(filename="palette.json") -> List[Tuple[str,List[Tuple[int,int,int]]]]:
+    def load_custom_palettes(filename="palette.json") -> List[Tuple[str, List[Tuple[int, int, int]]]]:
         pals = []
         if os.path.exists(filename):
             try:
-                with open(filename,'r') as f:
+                with open(filename, 'r') as f:
                     data = json.load(f)
                 for p in data:
                     nm = p['name']
@@ -1423,74 +1550,169 @@ def run_cli():
                 print(f"Warning: fail load palettes: {e}", file=sys.stderr)
         else:
             # create empty
-            with open(filename,'w') as f:
+            with open(filename, 'w') as f:
                 json.dump([], f)
         return pals
 
-    def save_custom_palettes(filename:str, pal_list:List[Tuple[str,List[Tuple[int,int,int]]]]):
+    def save_custom_palettes(filename: str, pal_list: List[Tuple[str, List[Tuple[int, int, int]]]]):
         data = []
         for nm, cols in pal_list:
             hxcols = [rgb_to_hex(c) for c in cols]
             data.append({"name": nm, "colors": hxcols})
-        with open(filename,'w') as f:
+        with open(filename, 'w') as f:
             json.dump(data, f, indent=4)
 
-    custom_palettes = load_custom_palettes("palette.json")
-
-    def is_video_file(path:str) -> bool:
+    def is_video_file(path: str) -> bool:
         e = os.path.splitext(path)[1].lower()
-        return e in [".mp4",".mkv",".avi",".mov"]
+        return e in [".mp4", ".mkv", ".avi", ".mov"]
+
+    def compute_even_dimensions(orig_w: int, orig_h: int, max_size: int) -> Tuple[int, int]:
+        """
+        Compute target dimensions such that the smaller side is close to max_size and both dimensions are even.
+        """
+        if orig_w >= orig_h:
+            target_h = max_size if max_size % 2 == 0 else max_size - 1
+            target_w = int(round((orig_w / orig_h) * target_h))
+            if target_w % 2 != 0:
+                target_w += 1
+        else:
+            target_w = max_size if max_size % 2 == 0 else max_size - 1
+            target_h = int(round((orig_h / orig_w) * target_w))
+            if target_h % 2 != 0:
+                target_h += 1
+        return target_w, target_h
 
     def pixelize_image_cli(img: Image.Image, max_size: int) -> Image.Image:
         ratio = img.width / img.height
+
         if img.width >= img.height:
-            nw = max_size
-            nh = int(max_size / ratio)
-        else:
+            # Landscape: set height = max_size, compute width accordingly
             nh = max_size
             nw = int(max_size * ratio)
-        nw = (nw//2)*2
-        nh = (nh//2)*2
+        else:
+            # Portrait: set width = max_size, compute height accordingly
+            nw = max_size
+            nh = int(max_size / ratio)
+
+        # Ensure even dimensions
+        nw = (nw // 2) * 2
+        nh = (nh // 2) * 2
+
         resized = img.resize((nw, nh), Image.Resampling.NEAREST)
         return resized.convert('RGB')
 
-    def generate_kmeans_palette_cli(img: Image.Image, num_colors: int, random_state=42) -> List[Tuple[int,int,int]]:
+    def pixelize_image_ai_cli(img: Image.Image, max_size: int) -> Image.Image:
+        # Neural pixelization using your model.
+        import torch
+        from models.pixelization import Model, resize_image
+        with tempfile.TemporaryDirectory() as tmpdir:
+            temp_id = str(uuid.uuid4())
+            temp_input = os.path.join(tmpdir, f"temp_input_{temp_id}.png")
+            temp_output = os.path.join(tmpdir, f"temp_output_{temp_id}.png")
+            temp_resized_input = os.path.join(tmpdir, f"temp_resized_input_{temp_id}.png")
+            img.save(temp_input)
+            device_type = "cuda" if torch.cuda.is_available() else "cpu"
+            m = Model(device=device_type)
+            m.load()
+            # Resize before neural pixelization (to max_size * 4)
+            resize_image(temp_input, temp_resized_input, max_size * 4)
+            # Apply neural pixelization
+            m.pixelize(temp_resized_input, temp_output)
+            # Resize back to max_size
+            resize_image(temp_output, temp_output, max_size)
+            final_img = Image.open(temp_output).convert('RGB')
+            # Enforce even dimensions
+            orig_w, orig_h = final_img.size
+            target_w, target_h = compute_even_dimensions(orig_w, orig_h, max_size)
+            final_img = final_img.resize((target_w, target_h), Image.Resampling.NEAREST)
+            return final_img
+
+    def generate_kmeans_palette_cli(img: Image.Image, num_colors: int, random_state=42) -> List[Tuple[int, int, int]]:
         return ColorReducer.generate_kmeans_palette(img, num_colors, random_state=random_state)
 
-    def generate_uniform_palette_cli(num_colors:int) -> List[Tuple[int,int,int]]:
+    def generate_uniform_palette_cli(num_colors: int) -> List[Tuple[int, int, int]]:
         return ColorReducer.generate_uniform_palette(num_colors)
 
-    def generate_median_cut_palette_cli(img: Image.Image, num_colors:int) -> List[Tuple[int,int,int]]:
+    def generate_median_cut_palette_cli(img: Image.Image, num_colors: int) -> List[Tuple[int, int, int]]:
         return ColorReducer.reduce_colors(img, num_colors)
 
-    def get_algorithmic_palette_cli(img: Image.Image, algo: str, num_colors: int) -> List[Tuple[int,int,int]]:
-        if algo=="median_cut":
+    def get_algorithmic_palette_cli(img: Image.Image, algo: str, num_colors: int) -> List[Tuple[int, int, int]]:
+        if algo == "median_cut":
             return generate_median_cut_palette_cli(img, num_colors)
-        elif algo=="kmeans_variant1":
+        elif algo == "kmeans_variant1":
             return generate_kmeans_palette_cli(img, num_colors, random_state=42)
-        elif algo=="kmeans_variant2":
+        elif algo == "kmeans_variant2":
             return generate_kmeans_palette_cli(img, num_colors, random_state=123)
-        elif algo=="uniform":
+        elif algo == "uniform":
             return generate_uniform_palette_cli(num_colors)
         else:
             # fallback
             return generate_median_cut_palette_cli(img, num_colors)
 
-    def do_pixel_dither(input_path:str,
-                        output_path:str,
-                        do_pixel:bool,
-                        do_dither:bool,
-                        mode:str,
-                        colors:int,
-                        algo_palette:Optional[str],
-                        pal_name:Optional[str],
-                        max_size:int,
-                        use_gamma:bool=False):
+    def final_resize_result(file_path: str, target_size: int):
+        """
+        Upscale or downscale the final result (image or video) to 'target_size'
+        for the smaller dimension, using nearest-neighbor scaling.
+        """
+        if is_video_file(file_path):
+            probe = ffmpeg.probe(file_path)
+            video_stream = next((s for s in probe["streams"] if s["codec_type"] == "video"), None)
+            if not video_stream:
+                print("No video stream found in the file.")
+                return
+            width = int(video_stream["width"])
+            height = int(video_stream["height"])
+            scale_factor = target_size / min(width, height)
+            new_width = int(round(width * scale_factor / 2) * 2)
+            new_height = int(round(height * scale_factor / 2) * 2)
+            base, ext = os.path.splitext(file_path)
+            output_path = f"{base}_resized{ext}"
+            (
+                ffmpeg
+                .input(file_path)
+                .output(
+                    output_path,
+                    vf=f"scale={new_width}:{new_height}:flags=neighbor",
+                    vcodec="libx264",
+                    preset="fast",
+                    acodec="copy",
+                    scodec="copy",
+                    map="0"
+                )
+                .run(overwrite_output=True)
+            )
+            print(f"Final resized video: {output_path}")
+        else:
+            img = Image.open(file_path).convert("RGB")
+            w, h = img.size
+            scale_factor = target_size / min(w, h)
+            new_w = round(w * scale_factor)
+            new_h = round(h * scale_factor)
+            resized_img = img.resize((new_w, new_h), Image.Resampling.NEAREST)
+            base, ext = os.path.splitext(file_path)
+            output_path = f"{base}_resized{ext}"
+            resized_img.save(output_path)
+            print(f"Final resized image: {output_path}")
+
+    def do_pixel_dither(input_path,
+                        output_path,
+                        do_pixel,
+                        do_dither,
+                        mode,
+                        colors,
+                        algo_palette,
+                        pal_name,
+                        max_size,
+                        use_gamma=False,
+                        use_neural=False,
+                        final_resize=None):
 
         used_palette = None
+        custom_pals = load_custom_palettes("palette.json")
+
         if pal_name:
             found = None
-            for n,c in custom_palettes:
+            for n, c in custom_pals:
                 if n.lower() == pal_name.lower():
                     found = c
                     break
@@ -1499,21 +1721,23 @@ def run_cli():
                 sys.exit(1)
             used_palette = found
 
-        def process_single_image(img: Image.Image):
-            # pixelize if needed
+        def process_single_image(img):
+            # Pixelize first
             if do_pixel:
-                img = pixelize_image_cli(img, max_size)
-
+                if use_neural:
+                    img = pixelize_image_ai_cli(img, max_size)
+                else:
+                    img = pixelize_image_cli(img, max_size)
+            # Then dither
             if do_dither:
+                # Decide on a palette
                 if used_palette is None:
-                    # generate algorithmic palette
                     if algo_palette:
                         pal = get_algorithmic_palette_cli(img, algo_palette, colors)
                     else:
                         pal = generate_median_cut_palette_cli(img, colors)
                 else:
                     pal = used_palette
-
                 try:
                     dm = DitherMode(mode)
                 except:
@@ -1521,28 +1745,31 @@ def run_cli():
 
                 dith = ImageDitherer(colors, dm, pal, use_gamma=use_gamma)
                 img = dith.apply_dithering(img)
+
             return img
 
         if is_video_file(input_path):
             tmp_dir = "cli_frames_tmp"
             os.makedirs(tmp_dir, exist_ok=True)
             try:
-                # extract frames
-                subprocess.run(["ffmpeg","-y","-i",input_path,
-                                os.path.join(tmp_dir,"frame_%05d.png")],
+                subprocess.run(["ffmpeg", "-y", "-i", input_path,
+                                os.path.join(tmp_dir, "frame_%05d.png")],
                                check=True)
 
-                # get fps
-                p = subprocess.run(["ffprobe","-v","error","-select_streams","v:0",
-                                    "-show_entries","stream=r_frame_rate",
-                                    "-of","default=nokey=1:noprint_wrappers=1", input_path],
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   text=True, check=True)
+                p = subprocess.run(
+                    ["ffprobe", "-v", "error", "-select_streams", "v:0",
+                     "-show_entries", "stream=r_frame_rate",
+                     "-of", "default=nokey=1:noprint_wrappers=1", input_path],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    check=True
+                )
                 raw = p.stdout.strip()
                 if raw and "/" in raw:
-                    n,d = raw.split("/")
+                    n, d = raw.split("/")
                     try:
-                        fps = float(n)/float(d)
+                        fps = float(n) / float(d)
                     except:
                         fps = 30.0
                 else:
@@ -1554,27 +1781,29 @@ def run_cli():
                     shutil.rmtree(tmp_dir)
                     sys.exit(1)
 
-                # If no palette is provided but do_dither, generate from 1st frame
+                # Build palette if needed
                 if used_palette is None and do_dither and algo_palette is None:
                     test_img = Image.open(frame_files[0])
                     if do_pixel:
-                        test_img = pixelize_image_cli(test_img, max_size)
-                    # fallback = median cut
+                        if use_neural:
+                            test_img = pixelize_image_ai_cli(test_img, max_size)
+                        else:
+                            test_img = pixelize_image_cli(test_img, max_size)
                     used_palette = generate_median_cut_palette_cli(test_img, colors)
 
-                # Actually do dithering for each frame
                 if used_palette is None and do_dither and algo_palette:
-                    # We'll generate from 1st frame using the algo
                     test_img = Image.open(frame_files[0])
                     if do_pixel:
-                        test_img = pixelize_image_cli(test_img, max_size)
+                        if use_neural:
+                            test_img = pixelize_image_ai_cli(test_img, max_size)
+                        else:
+                            test_img = pixelize_image_cli(test_img, max_size)
                     used_palette = get_algorithmic_palette_cli(test_img, algo_palette, colors)
 
                 try:
                     dm = DitherMode(mode)
                 except:
                     dm = DitherMode.BAYER4x4
-
                 dith_obj = ImageDitherer(colors, dm, used_palette, use_gamma=use_gamma)
 
                 totalf = len(frame_files)
@@ -1582,36 +1811,37 @@ def run_cli():
                     try:
                         frm = Image.open(fpth)
                         if do_pixel:
-                            frm = pixelize_image_cli(frm, max_size)
+                            frm = pixelize_image_ai_cli(frm, max_size) if use_neural else pixelize_image_cli(frm, max_size)
                         if do_dither:
                             frm = dith_obj.apply_dithering(frm)
                         frm.save(fpth)
                     except Exception as e:
                         print(f"\nError on frame {i} / {fpth}: {e}", file=sys.stderr)
                         continue
-                    prog = i/totalf
+                    prog = i / totalf
                     bar_len = 30
-                    fill = int(bar_len*prog)
-                    bar = '#'*fill + '-'*(bar_len-fill)
+                    fill = int(bar_len * prog)
+                    bar = '#' * fill + '-' * (bar_len - fill)
                     sys.stdout.write(f"\rProcessing: [{bar}] {i}/{totalf}")
                     sys.stdout.flush()
                 print()
 
-                # re-encode
                 subprocess.run([
-                    "ffmpeg","-y",
-                    "-framerate",f"{fps:.5f}",
-                    "-i",os.path.join(tmp_dir,"frame_%05d.png"),
-                    "-i",input_path,
-                    "-map","0:v","-map","1:a?","-map","1:s?",
-                    "-c:v","libx264","-pix_fmt","yuv420p",
-                    "-c:a","copy","-c:s","copy",
-                    "-r",f"{fps:.5f}",
+                    "ffmpeg", "-y",
+                    "-framerate", f"{fps:.5f}",
+                    "-i", os.path.join(tmp_dir, "frame_%05d.png"),
+                    "-i", input_path,
+                    "-map", "0:v", "-map", "1:a?", "-map", "1:s?",
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    "-c:a", "copy", "-c:s", "copy",
+                    "-r", f"{fps:.5f}",
                     output_path
                 ], check=True)
-
                 shutil.rmtree(tmp_dir)
                 print(f"Video processed and saved to {output_path}")
+
+                if final_resize is not None:
+                    final_resize_result(output_path, final_resize)
 
             except Exception as e:
                 print(f"Error: {e}", file=sys.stderr)
@@ -1619,7 +1849,6 @@ def run_cli():
                 sys.exit(1)
 
         else:
-            # single image
             try:
                 img = Image.open(input_path)
             except Exception as e:
@@ -1630,18 +1859,24 @@ def run_cli():
             try:
                 result.save(output_path)
                 print(f"Image processed and saved to {output_path}")
+                if final_resize is not None:
+                    final_resize_result(output_path, final_resize)
             except Exception as e:
                 print(f"Error saving image: {e}", file=sys.stderr)
                 sys.exit(1)
 
     cmd = args.command
+
     if cmd == 'pixelize':
         do_pixel_dither(args.input_image, args.output_image,
                         do_pixel=True, do_dither=False,
                         mode='none', colors=16,
                         algo_palette=None, pal_name=None,
                         max_size=args.max_size,
-                        use_gamma=False)
+                        use_gamma=False,
+                        use_neural=args.neural,
+                        final_resize=None)
+
     elif cmd == 'dither':
         if args.algo_palette and args.palette:
             print("Error: Choose either --algo-palette or --palette, not both.", file=sys.stderr)
@@ -1652,7 +1887,10 @@ def run_cli():
                         algo_palette=args.algo_palette,
                         pal_name=args.palette,
                         max_size=640,
-                        use_gamma=args.gamma_correction)
+                        use_gamma=args.gamma_correction,
+                        use_neural=False,
+                        final_resize=None)
+
     elif cmd == 'dither-pixelize':
         if args.algo_palette and args.palette:
             print("Error: Choose either --algo-palette or --palette, not both.", file=sys.stderr)
@@ -1663,7 +1901,10 @@ def run_cli():
                         algo_palette=args.algo_palette,
                         pal_name=args.palette,
                         max_size=args.max_size,
-                        use_gamma=args.gamma_correction)
+                        use_gamma=args.gamma_correction,
+                        use_neural=args.neural,
+                        final_resize=args.final_resize)
+
     elif cmd == 'import-lospal':
         url = args.url
         try:
@@ -1676,25 +1917,26 @@ def run_cli():
                 pjson = json.loads(data)
             name = pjson['name']
             cols = pjson['colors']
-            def hx_to_rgb(hx:str)->Tuple[int,int,int]:
+            def hx_to_rgb(hx: str) -> Tuple[int, int, int]:
                 hx = hx.lstrip('#')
-                return tuple(int(hx[i:i+2],16) for i in (0,2,4))
+                return tuple(int(hx[i:i+2], 16) for i in (0, 2, 4))
             rgbc = [hx_to_rgb(f"#{c}") for c in cols]
-            existing_names = [n for n,_ in custom_palettes]
+            existing_names = [n for n, _ in custom_palettes]
             if name in existing_names:
                 print(f"Error: A palette named '{name}' already exists in palette.json", file=sys.stderr)
                 sys.exit(1)
+            custom_palettes = load_custom_palettes("palette.json")
             custom_palettes.append((name, rgbc))
             save_custom_palettes("palette.json", custom_palettes)
             print(f"Palette '{name}' imported successfully from: {url}")
         except Exception as e:
             print(f"Error importing from lospec.com:\n{e}", file=sys.stderr)
             sys.exit(1)
+
     elif cmd == 'create-pal-from-image':
         input_image = args.input_image
         ccount = args.colors
         pname = args.name or "FromImage"
-
         try:
             new_img = Image.open(input_image)
         except Exception as e:
@@ -1702,19 +1944,13 @@ def run_cli():
             sys.exit(1)
 
         arr_full = np.array(new_img.convert('RGB'))
-        allpix = arr_full.reshape(-1,3)
+        allpix = arr_full.reshape(-1, 3)
         unique_pix = np.unique(allpix, axis=0)
         unique_count = unique_pix.shape[0]
-        if unique_count < ccount:
-            final_count = unique_count
-        else:
-            final_count = ccount
-        if final_count < 1:
-            final_count = 1
+        final_count = ccount if unique_count >= ccount else unique_count
+        final_count = max(final_count, 1)
 
-        # sample up to 10k
         if len(allpix) > 10000:
-            import random
             idx = random.sample(range(len(allpix)), 10000)
             small = allpix[idx]
         else:
@@ -1726,18 +1962,70 @@ def run_cli():
         centers = km.cluster_centers_.astype(int)
         kpal = [tuple(c) for c in centers]
 
-        existing_names = [n for n,_ in custom_palettes]
+        cp = load_custom_palettes("palette.json")
+        existing_names = [n for n, _ in cp]
         if pname in existing_names:
             print(f"Error: A palette named '{pname}' already exists in palette.json", file=sys.stderr)
             sys.exit(1)
 
-        custom_palettes.append((pname,kpal))
-        save_custom_palettes("palette.json", custom_palettes)
+        cp.append((pname, kpal))
+        save_custom_palettes("palette.json", cp)
         print(f"Created a {final_count}-color palette from: {input_image}\nStored as '{pname}' in palette.json")
+
+    elif cmd == 'resize':
+        if not os.path.exists(args.input_path):
+            print("Error: File not found.")
+            sys.exit(1)
+        ext = os.path.splitext(args.input_path)[1].lower()
+        if ext in [".jpg", ".jpeg", ".png", ".bmp", ".gif", ".webp"]:
+            img = Image.open(args.input_path).convert("RGB")
+            w, h = img.size
+            sf = args.target_size / min(w, h)
+            new_w = round(w * sf)
+            new_h = round(h * sf)
+            resized = img.resize((new_w, new_h), Image.Resampling.NEAREST)
+            base, e = os.path.splitext(args.input_path)
+            outp = f"{base}_resized{e}"
+            resized.save(outp)
+            print(f"Image saved: {outp}")
+        elif ext in [".mp4", ".mkv", ".avi", ".mov", ".webm"]:
+            prb = ffmpeg.probe(args.input_path)
+            vstream = next((s for s in prb["streams"] if s["codec_type"] == "video"), None)
+            if not vstream:
+                print("No video stream found.")
+                sys.exit(1)
+            w = int(vstream["width"])
+            h = int(vstream["height"])
+            sf = args.target_size / min(w, h)
+            nw = int(round(w * sf / 2) * 2)
+            nh = int(round(h * sf / 2) * 2)
+            base, e = os.path.splitext(args.input_path)
+            outp = f"{base}_resized{e}"
+            (
+                ffmpeg
+                .input(args.input_path)
+                .output(
+                    outp,
+                    vf=f"scale={nw}:{nh}:flags=neighbor",
+                    vcodec="libx264",
+                    preset="fast",
+                    acodec="copy",
+                    scodec="copy",
+                    map="0"
+                )
+                .run(overwrite_output=True)
+            )
+            print(f"Video saved: {outp}")
+        else:
+            print("Unsupported file type.")
+            sys.exit(1)
 
     else:
         parser.print_help()
         sys.exit(1)
+
+
+
 
 def main():
     if len(sys.argv) > 1:

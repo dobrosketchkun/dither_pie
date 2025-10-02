@@ -12,6 +12,7 @@ Key improvements:
 import sys
 import os
 import json
+import random
 import threading
 import subprocess
 import tempfile
@@ -127,6 +128,16 @@ class DitheringApp(ctk.CTk):
             command=self.load_video
         )
         btn_load_video.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
+        row += 1
+        
+        # Random frame button (hidden by default)
+        self.random_frame_button = ctk.CTkButton(
+            self.sidebar,
+            text="Load Random Frame",
+            command=self.load_random_frame
+        )
+        self.random_frame_button.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
+        self.random_frame_button.grid_remove()  # Hidden by default
         row += 1
         
         # Separator
@@ -315,8 +326,9 @@ class DitheringApp(ctk.CTk):
             self.final_size_entry.delete(0, tk.END)
             self.final_size_entry.insert(0, str(larger_dim))
             
-            # Hide video button
+            # Hide video buttons
             self.apply_video_button.grid_remove()
+            self.random_frame_button.grid_remove()
             
             self.image_viewer.set_image(self.current_image)
             self.fit_to_window()
@@ -362,8 +374,9 @@ class DitheringApp(ctk.CTk):
             self.final_size_entry.delete(0, tk.END)
             self.final_size_entry.insert(0, str(larger_dim))
             
-            # Show video button
+            # Show video buttons
             self.apply_video_button.grid()
+            self.random_frame_button.grid()
             
             self.image_viewer.set_image(self.current_image)
             self.fit_to_window()
@@ -371,6 +384,55 @@ class DitheringApp(ctk.CTk):
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load video:\n{e}")
+    
+    def load_random_frame(self):
+        """Load a random frame from the video for preview."""
+        if not self.is_video or not self.video_path:
+            return
+        
+        try:
+            # Get total frame count
+            cmd = [
+                "ffprobe", "-v", "error", "-count_frames", "-select_streams", "v:0",
+                "-show_entries", "stream=nb_read_frames",
+                "-of", "default=nokey=1:noprint_wrappers=1", self.video_path
+            ]
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            total_frames_str = proc.stdout.strip()
+            total_frames = int(total_frames_str) if total_frames_str else 0
+            
+            if total_frames < 1:
+                raise ValueError("Failed to get frame count.")
+            
+            # Pick random frame (avoiding first frame)
+            idx = random.randint(1, total_frames - 1)
+            
+            # Extract that specific frame
+            with tempfile.TemporaryDirectory() as tmpdir:
+                tmp_frame = os.path.join(tmpdir, "tmp_preview_frame.png")
+                ext_cmd = [
+                    "ffmpeg", "-y", "-i", self.video_path,
+                    "-vf", f"select='eq(n,{idx})'",
+                    "-vframes", "1",
+                    tmp_frame
+                ]
+                subprocess.run(ext_cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                
+                # Load the frame
+                self.current_image = Image.open(tmp_frame).convert('RGB')
+            
+            # Reset processing state
+            self.pixelized_image = None
+            self.dithered_image = None
+            self.display_state = "current"
+            
+            # Update display
+            self.image_viewer.set_image(self.current_image)
+            self.fit_to_window()
+            self.status_bar.set_status(f"Loaded random frame #{idx} from video")
+            
+        except Exception as e:
+            messagebox.showerror("Video Error", f"Failed to load random frame:\n{e}")
     
     def _on_pixelize_regular(self):
         """Handle regular pixelization."""

@@ -11,6 +11,7 @@ Key improvements:
 
 import sys
 import os
+import json
 import threading
 import subprocess
 import tempfile
@@ -22,6 +23,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
 from PIL import Image
+import numpy as np
 
 # Local imports
 from dithering_lib import (
@@ -457,11 +459,11 @@ class DitheringApp(ctk.CTk):
             return
         
         # Show palette selection dialog
-        from gui_components import PalettePreview
+        from gui_components import PalettePreview, CustomPaletteCreator, PaletteImagePreviewDialog
         
         dialog = ctk.CTkToplevel(self)
         dialog.title("Select Palette Method")
-        dialog.geometry("450x400")
+        dialog.geometry("600x600")
         dialog.transient(self)
         dialog.grab_set()
         
@@ -471,44 +473,90 @@ class DitheringApp(ctk.CTk):
                     font=("Arial", 14, "bold")).pack(pady=10)
         
         # Generate palette options
-        palette_options = []
+        def generate_palette_options():
+            palette_options = []
+            
+            # Median Cut
+            mc_palette = ColorReducer.reduce_colors(self.pixelized_image, num_colors)
+            palette_options.append(("Median Cut", mc_palette))
+            
+            # K-means
+            km_palette = ColorReducer.generate_kmeans_palette(self.pixelized_image, num_colors, random_state=42)
+            palette_options.append(("K-means", km_palette))
+            
+            # Uniform
+            uniform_palette = ColorReducer.generate_uniform_palette(num_colors)
+            palette_options.append(("Uniform", uniform_palette))
+            
+            # Load custom palettes from palette.json
+            custom_palettes_data = self.palette_mgr.palettes
+            for palette_data in custom_palettes_data:
+                name = palette_data['name']
+                hex_colors = palette_data['colors']
+                rgb_colors = [self.palette_mgr._hex_to_rgb(c) for c in hex_colors]
+                palette_options.append((name, rgb_colors))
+            
+            return palette_options
         
-        # Median Cut
-        mc_palette = ColorReducer.reduce_colors(self.pixelized_image, num_colors)
-        palette_options.append(("Median Cut", mc_palette))
-        
-        # K-means
-        km_palette = ColorReducer.generate_kmeans_palette(self.pixelized_image, num_colors, random_state=42)
-        palette_options.append(("K-means", km_palette))
-        
-        # Uniform
-        uniform_palette = ColorReducer.generate_uniform_palette(num_colors)
-        palette_options.append(("Uniform", uniform_palette))
-        
-        # Load custom palettes from palette.json
-        custom_palettes_data = self.palette_mgr.palettes
-        for palette_data in custom_palettes_data:
-            name = palette_data['name']
-            hex_colors = palette_data['colors']
-            rgb_colors = [self.palette_mgr._hex_to_rgb(c) for c in hex_colors]
-            palette_options.append((name, rgb_colors))
+        palette_options = generate_palette_options()
         
         # Radio buttons for selection
         selected_var = tk.StringVar(value="Median Cut")
         
-        scroll_frame = ctk.CTkScrollableFrame(dialog, height=200)
+        scroll_frame = ctk.CTkScrollableFrame(dialog, height=300)
         scroll_frame.pack(fill="both", expand=True, padx=10, pady=5)
         
-        for name, palette in palette_options:
-            frame = ctk.CTkFrame(scroll_frame)
-            frame.pack(fill="x", padx=5, pady=5)
+        def update_palette_list():
+            # Clear existing widgets
+            for widget in scroll_frame.winfo_children():
+                widget.destroy()
             
-            radio = ctk.CTkRadioButton(frame, text=name, variable=selected_var, value=name)
-            radio.pack(side="left", padx=5)
+            nonlocal palette_options
+            palette_options = generate_palette_options()
             
-            # Show palette preview
-            preview = PalettePreview(frame, palette, width=220, height=20)
-            preview.pack(side="right", padx=5)
+            for name, palette in palette_options:
+                frame = ctk.CTkFrame(scroll_frame)
+                frame.pack(fill="x", padx=5, pady=5)
+                
+                radio = ctk.CTkRadioButton(frame, text=name, variable=selected_var, value=name)
+                radio.pack(side="left", padx=5)
+                
+                # Show palette preview
+                preview = PalettePreview(frame, palette, width=220, height=20)
+                preview.pack(side="right", padx=5)
+        
+        update_palette_list()
+        
+        # Palette management buttons
+        custom_buttons_frame = ctk.CTkFrame(dialog)
+        custom_buttons_frame.pack(pady=10, fill='x', padx=10)
+        
+        def create_custom_palette():
+            CustomPaletteCreator(dialog, self.palette_mgr, update_palette_list)
+        
+        def import_from_lospec():
+            self._import_from_lospec(dialog, update_palette_list)
+        
+        def create_palette_from_image():
+            self._create_palette_from_image(dialog, update_palette_list, selected_var)
+        
+        ctk.CTkButton(
+            custom_buttons_frame,
+            text="Create Custom Palette",
+            command=create_custom_palette
+        ).pack(side="left", padx=5, fill='x', expand=True)
+        
+        ctk.CTkButton(
+            custom_buttons_frame,
+            text="Import from lospec.com",
+            command=import_from_lospec
+        ).pack(side="left", padx=5, fill='x', expand=True)
+        
+        ctk.CTkButton(
+            custom_buttons_frame,
+            text="Create from Image",
+            command=create_palette_from_image
+        ).pack(side="left", padx=5, fill='x', expand=True)
         
         def on_ok():
             # Find selected palette
@@ -723,6 +771,122 @@ class DitheringApp(ctk.CTk):
             self.image_viewer.set_image(self.pixelized_image)
             self.display_state = "pixelized"
             self.fit_to_window()
+    
+    def _import_from_lospec(self, parent_dialog, refresh_callback):
+        """Import palette from lospec.com URL."""
+        from tkinter import simpledialog
+        import urllib.request
+        import json
+        
+        url = simpledialog.askstring("Import Palette", "Paste lospec.com Palette URL:", parent=parent_dialog)
+        if not url:
+            return
+        
+        try:
+            parts = url.rstrip('/').split('/')
+            if len(parts) < 2:
+                raise ValueError("URL does not contain enough parts to extract palette name.")
+            palette_slug = parts[-1]
+            json_url = f'https://lospec.com/palette-list/{palette_slug}.json'
+        except Exception as e:
+            messagebox.showerror("Invalid URL", f"Failed to parse palette name:\n{e}", parent=parent_dialog)
+            return
+        
+        try:
+            with urllib.request.urlopen(json_url) as resp:
+                data = resp.read()
+                pjson = json.loads(data)
+        except Exception as e:
+            messagebox.showerror("Download Error", f"Failed to download or parse palette JSON:\n{e}", parent=parent_dialog)
+            return
+        
+        try:
+            name = pjson['name']
+            colors = pjson['colors']
+            hex_colors = [f"#{c}" for c in colors]
+        except KeyError as e:
+            messagebox.showerror("JSON Error", f"Missing key in palette JSON: {e}", parent=parent_dialog)
+            return
+        except Exception as e:
+            messagebox.showerror("Parse Error", f"Failed to parse palette JSON:\n{e}", parent=parent_dialog)
+            return
+        
+        # Check for duplicates
+        existing_names = self.palette_mgr.list_palette_names()
+        if name in existing_names:
+            messagebox.showerror("Duplicate Palette", f"A palette named '{name}' already exists.", parent=parent_dialog)
+            return
+        
+        self.palette_mgr.add_palette(name, hex_colors)
+        refresh_callback()
+        messagebox.showinfo("Success", f"Palette '{name}' imported successfully.", parent=parent_dialog)
+    
+    def _create_palette_from_image(self, parent_dialog, refresh_callback, selected_var):
+        """Create palette from image file using k-means clustering."""
+        from gui_components import PaletteImagePreviewDialog
+        from sklearn.cluster import KMeans
+        
+        fp = filedialog.askopenfilename(
+            parent=parent_dialog,
+            filetypes=[("Image files", "*.png *.jpg *.jpeg *.gif *.bmp"),
+                      ("All files", "*.*")]
+        )
+        if not fp:
+            return
+        
+        try:
+            new_img = Image.open(fp).convert('RGB')
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to open image:\n{e}", parent=parent_dialog)
+            return
+        
+        try:
+            desired = int(self.colors_entry.get())
+            if desired <= 0:
+                raise ValueError
+        except:
+            desired = 16
+        
+        arr_full = np.array(new_img)
+        all_pixels = arr_full.reshape(-1, 3)
+        unique_pixels = np.unique(all_pixels, axis=0)
+        unique_count = unique_pixels.shape[0]
+        
+        if unique_count < desired:
+            n = unique_count
+        else:
+            n = desired
+        if n < 1:
+            n = 1
+        
+        if len(all_pixels) > 10000:
+            idx = np.random.choice(len(all_pixels), 10000, replace=False)
+            small = all_pixels[idx]
+        else:
+            small = all_pixels
+        
+        kmeans = KMeans(n_clusters=n, random_state=42)
+        kmeans.fit(small)
+        centers = kmeans.cluster_centers_.astype(int)
+        kpal = [tuple(v) for v in centers]
+        
+        from_img_preview = PaletteImagePreviewDialog(parent_dialog, kpal, fp, used_clusters=n)
+        parent_dialog.wait_window(from_img_preview)
+        
+        if from_img_preview.choose_another:
+            # Recursively call to pick another image
+            self._create_palette_from_image(parent_dialog, refresh_callback, selected_var)
+            return
+        elif from_img_preview.use_result:
+            # Generate unique name with random hex + color count
+            import secrets
+            random_hex = secrets.token_hex(3)  # 6-character hex string
+            pname = f"img_{random_hex}_{n}colors"
+            
+            hex_colors = [f'#{col[0]:02x}{col[1]:02x}{col[2]:02x}' for col in kpal]
+            self.palette_mgr.add_palette(pname, hex_colors)
+            refresh_callback()
+            selected_var.set(pname)
     
     def _apply_final_resize(self, image: Image.Image) -> Image.Image:
         """

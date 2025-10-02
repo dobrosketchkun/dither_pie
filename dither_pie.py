@@ -70,6 +70,7 @@ class DitheringApp(ctk.CTk):
         self.last_palette = None
         self.last_pixelization_method = "regular"
         self.display_state = "current"  # Track what we're showing: "current", "pixelized", "dithered"
+        self.original_size = None  # Store original image/video size (width, height)
         
         # Palette manager
         self.palette_mgr = PaletteManager()
@@ -149,6 +150,30 @@ class DitheringApp(ctk.CTk):
             command=self._on_pixelize_neural
         )
         btn_pixelize_neural.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
+        row += 1
+        
+        # Separator
+        ctk.CTkLabel(self.sidebar, text="Final Resize", font=("Arial", 14, "bold")).grid(
+            row=row, column=0, pady=(15, 5), padx=10
+        )
+        row += 1
+        
+        # Final resize checkbox and size entry
+        self.final_resize_var = tk.BooleanVar(value=False)
+        final_resize_check = ctk.CTkCheckBox(
+            self.sidebar,
+            text="Upscale to original size",
+            variable=self.final_resize_var
+        )
+        final_resize_check.grid(row=row, column=0, pady=5, padx=10, sticky='w')
+        row += 1
+        
+        ctk.CTkLabel(self.sidebar, text="Target Size (larger dim):").grid(row=row, column=0, pady=2, padx=10, sticky='w')
+        row += 1
+        
+        self.final_size_entry = ctk.CTkEntry(self.sidebar, width=100)
+        self.final_size_entry.insert(0, "1920")
+        self.final_size_entry.grid(row=row, column=0, pady=2, padx=10, sticky='w')
         row += 1
         
         # Separator
@@ -275,12 +300,18 @@ class DitheringApp(ctk.CTk):
             self.video_path = None
             self.display_state = "current"
             
+            # Store original size and update final size entry
+            self.original_size = self.current_image.size  # (width, height)
+            larger_dim = max(self.original_size)
+            self.final_size_entry.delete(0, tk.END)
+            self.final_size_entry.insert(0, str(larger_dim))
+            
             # Hide video button
             self.apply_video_button.grid_remove()
             
             self.image_viewer.set_image(self.current_image)
             self.fit_to_window()
-            self.status_bar.set_status(f"Loaded image: {Path(filepath).name}")
+            self.status_bar.set_status(f"Loaded image: {Path(filepath).name} - {self.original_size[0]}x{self.original_size[1]}")
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load image:\n{e}")
@@ -316,12 +347,18 @@ class DitheringApp(ctk.CTk):
             self.video_path = filepath
             self.display_state = "current"
             
+            # Store original size and update final size entry
+            self.original_size = self.current_image.size  # (width, height)
+            larger_dim = max(self.original_size)
+            self.final_size_entry.delete(0, tk.END)
+            self.final_size_entry.insert(0, str(larger_dim))
+            
             # Show video button
             self.apply_video_button.grid()
             
             self.image_viewer.set_image(self.current_image)
             self.fit_to_window()
-            self.status_bar.set_status(f"Loaded video: {Path(filepath).name} (showing first frame)")
+            self.status_bar.set_status(f"Loaded video: {Path(filepath).name} - {self.original_size[0]}x{self.original_size[1]} (showing first frame)")
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load video:\n{e}")
@@ -508,6 +545,9 @@ class DitheringApp(ctk.CTk):
             )
             
             self.dithered_image = ditherer.apply_dithering(self.pixelized_image)
+            
+            # Apply final resize if enabled
+            self.dithered_image = self._apply_final_resize(self.dithered_image)
             self.display_state = "dithered"
             
             self.after(0, lambda: self.image_viewer.set_image(self.dithered_image))
@@ -574,12 +614,22 @@ class DitheringApp(ctk.CTk):
                     # Regular uses multi-process mode (fast)
                     pixelize_func = ("regular", max_size)
             
+            # Get final resize parameters
+            final_resize_enabled = self.final_resize_var.get()
+            final_target_size = None
+            if final_resize_enabled:
+                try:
+                    final_target_size = int(self.final_size_entry.get())
+                except:
+                    final_target_size = None
+            
             # Process video
             success = self.video_processor.process_video_streaming(
                 self.video_path,
                 output_path,
                 ditherer,
-                pixelize_func=pixelize_func
+                pixelize_func=pixelize_func,
+                final_resize_target=final_target_size
             )
             
             # Show result
@@ -666,6 +716,50 @@ class DitheringApp(ctk.CTk):
             self.image_viewer.set_image(self.pixelized_image)
             self.display_state = "pixelized"
             self.fit_to_window()
+    
+    def _apply_final_resize(self, image: Image.Image) -> Image.Image:
+        """
+        Apply final resize to original size using nearest-neighbor interpolation.
+        This preserves the pixelated look when upscaling.
+        Ensures dimensions are even for video codec compatibility.
+        
+        Args:
+            image: The processed image to resize
+            
+        Returns:
+            Resized image or original if resize disabled
+        """
+        if not self.final_resize_var.get():
+            return image
+        
+        try:
+            target_size = int(self.final_size_entry.get())
+            if target_size <= 0:
+                return image
+        except:
+            return image
+        
+        current_w, current_h = image.size
+        
+        # Calculate new dimensions maintaining aspect ratio
+        if current_w >= current_h:
+            # Landscape: target_size is for width
+            new_w = target_size
+            new_h = int(round((current_h / current_w) * target_size))
+        else:
+            # Portrait: target_size is for height
+            new_h = target_size
+            new_w = int(round((current_w / current_h) * target_size))
+        
+        # Ensure dimensions are even (required for libx264 yuv420p when saving as video)
+        if new_w % 2 != 0:
+            new_w += 1
+        if new_h % 2 != 0:
+            new_h += 1
+        
+        # Use NEAREST to preserve pixelated look
+        resized = image.resize((new_w, new_h), Image.Resampling.NEAREST)
+        return resized
     
     def _generate_filename(self, state: str) -> str:
         """Generate a default filename for saving."""

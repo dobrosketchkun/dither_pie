@@ -497,8 +497,8 @@ class DitheringApp(ctk.CTk):
     
     def _on_apply_dithering(self):
         """Handle dithering - shows palette selection dialog and applies to current frame."""
-        if not self.pixelized_image:
-            messagebox.showwarning("No Image", "Please pixelize an image first.")
+        if not self.pixelized_image and not self.current_image:
+            messagebox.showwarning("No Image", "Please load an image or video first.")
             return
         
         # Show palette dialog and apply to current frame (works for both images and video preview)
@@ -520,6 +520,9 @@ class DitheringApp(ctk.CTk):
             messagebox.showerror("Invalid Input", "Please enter a valid positive integer for colors.")
             return
         
+        # Use pixelized image if available, otherwise use current image
+        source_image = self.pixelized_image if self.pixelized_image else self.current_image
+        
         # Show palette selection dialog
         from gui_components import PalettePreview, CustomPaletteCreator, PaletteImagePreviewDialog
         
@@ -539,11 +542,11 @@ class DitheringApp(ctk.CTk):
             palette_options = []
             
             # Median Cut
-            mc_palette = ColorReducer.reduce_colors(self.pixelized_image, num_colors)
+            mc_palette = ColorReducer.reduce_colors(source_image, num_colors)
             palette_options.append(("Median Cut", mc_palette))
             
             # K-means
-            km_palette = ColorReducer.generate_kmeans_palette(self.pixelized_image, num_colors, random_state=42)
+            km_palette = ColorReducer.generate_kmeans_palette(source_image, num_colors, random_state=42)
             palette_options.append(("K-means", km_palette))
             
             # Uniform
@@ -661,7 +664,9 @@ class DitheringApp(ctk.CTk):
                 use_gamma=self.gamma_var.get()
             )
             
-            self.dithered_image = ditherer.apply_dithering(self.pixelized_image)
+            # Use pixelized image if available, otherwise use current image
+            source_for_dithering = self.pixelized_image if self.pixelized_image else self.current_image
+            self.dithered_image = ditherer.apply_dithering(source_for_dithering)
             
             # Apply final resize if enabled
             self.dithered_image = self._apply_final_resize(self.dithered_image)
@@ -820,8 +825,13 @@ class DitheringApp(ctk.CTk):
                 self.image_viewer.set_image(self.pixelized_image)
                 self.display_state = "pixelized"
                 self.fit_to_window()
+            elif self.dithered_image:
+                # Skip directly to dithered if no pixelization step
+                self.image_viewer.set_image(self.dithered_image)
+                self.display_state = "dithered"
+                self.fit_to_window()
             else:
-                messagebox.showinfo("No Pixelized Image", "Please pixelize the image first.")
+                messagebox.showinfo("No Processed Image", "Please pixelize or apply dithering first.")
         elif self.display_state == "pixelized":
             if self.dithered_image:
                 self.image_viewer.set_image(self.dithered_image)
@@ -830,8 +840,13 @@ class DitheringApp(ctk.CTk):
             else:
                 messagebox.showinfo("No Dithered Image", "Please apply dithering first.")
         elif self.display_state == "dithered":
-            self.image_viewer.set_image(self.pixelized_image)
-            self.display_state = "pixelized"
+            # Go back to pixelized if it exists, otherwise go to current
+            if self.pixelized_image:
+                self.image_viewer.set_image(self.pixelized_image)
+                self.display_state = "pixelized"
+            else:
+                self.image_viewer.set_image(self.current_image)
+                self.display_state = "current"
             self.fit_to_window()
     
     def _import_from_lospec(self, parent_dialog, refresh_callback):

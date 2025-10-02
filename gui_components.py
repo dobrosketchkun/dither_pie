@@ -38,12 +38,20 @@ class ZoomableImage(tk.Canvas):
         self.bind("<Button-5>", self.zoom)
         self.bind("<Configure>", self.on_resize)
 
-    def set_image(self, image: Image.Image):
+    def set_image(self, image: Image.Image, update: bool = True):
+        """
+        Set the image to display.
+        
+        Args:
+            image: PIL Image to display
+            update: If True, immediately update the view. Set to False if you'll call fit_to_window() right after.
+        """
         self.original_image = image
         self.zoom_factor = 1.0
         self.offset_x = 0
         self.offset_y = 0
-        self.update_view()
+        if update:
+            self.update_view()
 
     def fit_to_window(self):
         if not self.original_image:

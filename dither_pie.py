@@ -403,7 +403,7 @@ class DitheringApp(ctk.CTk):
             self.apply_video_button.grid_remove()
             self.random_frame_button.grid_remove()
             
-            self.image_viewer.set_image(self.current_image)
+            self.image_viewer.set_image(self.current_image, update=False)
             self.fit_to_window()
             self.status_bar.set_status(f"Loaded image: {Path(filepath).name} - {self.original_size[0]}x{self.original_size[1]}")
             
@@ -459,7 +459,7 @@ class DitheringApp(ctk.CTk):
             self.apply_video_button.grid()
             self.random_frame_button.grid()
             
-            self.image_viewer.set_image(self.current_image)
+            self.image_viewer.set_image(self.current_image, update=False)
             self.fit_to_window()
             self.status_bar.set_status(f"Loaded video: {Path(filepath).name} - {self.original_size[0]}x{self.original_size[1]} (showing first frame)")
             
@@ -510,7 +510,7 @@ class DitheringApp(ctk.CTk):
             self._invalidate_pixelization_cache()
             
             # Update display
-            self.image_viewer.set_image(self.current_image)
+            self.image_viewer.set_image(self.current_image, update=False)
             self.fit_to_window()
             self.status_bar.set_status(f"Loaded random frame #{idx} from video")
             
@@ -537,7 +537,7 @@ class DitheringApp(ctk.CTk):
             self.last_pixelization_method = "regular"
             self.dithered_image = None
             self.display_state = "pixelized"
-            self.image_viewer.set_image(self.pixelized_image)
+            self.image_viewer.set_image(self.pixelized_image, update=False)
             self.fit_to_window()
             return
         
@@ -554,7 +554,7 @@ class DitheringApp(ctk.CTk):
             self._update_pixelization_cache("regular", max_size)
             
             # Update GUI from main thread
-            self.after(0, lambda: self.image_viewer.set_image(self.pixelized_image))
+            self.after(0, lambda: self.image_viewer.set_image(self.pixelized_image, update=False))
             self.after(0, lambda: self.fit_to_window())
             self.after(0, lambda: self.status_bar.set_status("Pixelization complete"))
         
@@ -580,7 +580,7 @@ class DitheringApp(ctk.CTk):
             self.last_pixelization_method = "neural"
             self.dithered_image = None
             self.display_state = "pixelized"
-            self.image_viewer.set_image(self.pixelized_image)
+            self.image_viewer.set_image(self.pixelized_image, update=False)
             self.fit_to_window()
             return
         
@@ -598,7 +598,7 @@ class DitheringApp(ctk.CTk):
             # Update cache
             self._update_pixelization_cache("neural", max_size)
             
-            self.after(0, lambda: self.image_viewer.set_image(self.pixelized_image))
+            self.after(0, lambda: self.image_viewer.set_image(self.pixelized_image, update=False))
             self.after(0, lambda: self.fit_to_window())
             self.after(0, lambda: self.status_bar.set_status("Neural pixelization complete"))
         
@@ -790,7 +790,7 @@ class DitheringApp(ctk.CTk):
         
         def display_preview(preview_img):
             """Display preview in the MAIN image viewer."""
-            self.image_viewer.set_image(preview_img)
+            self.image_viewer.set_image(preview_img, update=False)
             self.fit_to_window()
         
         def on_palette_selected(palette_name):
@@ -938,7 +938,7 @@ class DitheringApp(ctk.CTk):
             
             # Restore original display
             if original_displayed_image:
-                self.image_viewer.set_image(original_displayed_image)
+                self.image_viewer.set_image(original_displayed_image, update=False)
                 self.fit_to_window()
             self.status_bar.set_status("Palette selection cancelled")
             dialog.destroy()
@@ -993,7 +993,7 @@ class DitheringApp(ctk.CTk):
                 self.dithered_image = self._apply_final_resize(self.dithered_image)
                 self.display_state = "dithered"
                 
-                self.after(0, lambda: self.image_viewer.set_image(self.dithered_image))
+                self.after(0, lambda: self.image_viewer.set_image(self.dithered_image, update=False))
                 self.after(0, lambda: self.fit_to_window())
                 self.after(0, lambda: self.status_bar.set_status("Dithering complete"))
             
@@ -1155,19 +1155,19 @@ class DitheringApp(ctk.CTk):
         """Toggle between current, pixelized, and dithered views."""
         if self.display_state == "current":
             if self.pixelized_image:
-                self.image_viewer.set_image(self.pixelized_image)
+                self.image_viewer.set_image(self.pixelized_image, update=False)
                 self.display_state = "pixelized"
                 self.fit_to_window()
             elif self.dithered_image:
                 # Skip directly to dithered if no pixelization step
-                self.image_viewer.set_image(self.dithered_image)
+                self.image_viewer.set_image(self.dithered_image, update=False)
                 self.display_state = "dithered"
                 self.fit_to_window()
             else:
                 messagebox.showinfo("No Processed Image", "Please pixelize or apply dithering first.")
         elif self.display_state == "pixelized":
             if self.dithered_image:
-                self.image_viewer.set_image(self.dithered_image)
+                self.image_viewer.set_image(self.dithered_image, update=False)
                 self.display_state = "dithered"
                 self.fit_to_window()
             else:
@@ -1175,10 +1175,10 @@ class DitheringApp(ctk.CTk):
         elif self.display_state == "dithered":
             # Go back to pixelized if it exists, otherwise go to current
             if self.pixelized_image:
-                self.image_viewer.set_image(self.pixelized_image)
+                self.image_viewer.set_image(self.pixelized_image, update=False)
                 self.display_state = "pixelized"
             else:
-                self.image_viewer.set_image(self.current_image)
+                self.image_viewer.set_image(self.current_image, update=False)
                 self.display_state = "current"
             self.fit_to_window()
     

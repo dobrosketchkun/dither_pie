@@ -199,6 +199,16 @@ class DitheringApp(ctk.CTk):
         btn_dither.grid(row=row, column=0, pady=10, padx=10, sticky='ew')
         row += 1
         
+        # Apply to Video button (hidden by default)
+        self.apply_video_button = ctk.CTkButton(
+            self.sidebar,
+            text="Apply to Video",
+            command=self._apply_to_video_workflow
+        )
+        self.apply_video_button.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
+        self.apply_video_button.grid_remove()  # Hidden by default
+        row += 1
+        
         # Save button
         btn_save = ctk.CTkButton(
             self.sidebar,
@@ -265,6 +275,9 @@ class DitheringApp(ctk.CTk):
             self.video_path = None
             self.display_state = "current"
             
+            # Hide video button
+            self.apply_video_button.grid_remove()
+            
             self.image_viewer.set_image(self.current_image)
             self.fit_to_window()
             self.status_bar.set_status(f"Loaded image: {Path(filepath).name}")
@@ -302,6 +315,9 @@ class DitheringApp(ctk.CTk):
             self.is_video = True
             self.video_path = filepath
             self.display_state = "current"
+            
+            # Show video button
+            self.apply_video_button.grid()
             
             self.image_viewer.set_image(self.current_image)
             self.fit_to_window()
@@ -372,15 +388,21 @@ class DitheringApp(ctk.CTk):
         threading.Thread(target=process, daemon=True).start()
     
     def _on_apply_dithering(self):
-        """Handle dithering - shows palette selection dialog."""
-        if self.is_video:
-            self._apply_to_video()
-            return
-        
+        """Handle dithering - shows palette selection dialog and applies to current frame."""
         if not self.pixelized_image:
             messagebox.showwarning("No Image", "Please pixelize an image first.")
             return
         
+        # Show palette dialog and apply to current frame (works for both images and video preview)
+        self._show_palette_dialog_and_apply()
+        
+        # If video, show the "Apply to Video" button after dithering preview
+        if self.is_video and self.dithered_image:
+            self.apply_video_button.grid()
+            self.status_bar.set_status("Preview ready. Click 'Apply to Video' to process full video.")
+    
+    def _show_palette_dialog_and_apply(self):
+        """Show palette dialog and apply dithering to current image."""
         # Get number of colors
         try:
             num_colors = int(self.colors_entry.get())
@@ -395,7 +417,7 @@ class DitheringApp(ctk.CTk):
         
         dialog = ctk.CTkToplevel(self)
         dialog.title("Select Palette Method")
-        dialog.geometry("450x350")
+        dialog.geometry("450x400")
         dialog.transient(self)
         dialog.grab_set()
         
@@ -418,6 +440,14 @@ class DitheringApp(ctk.CTk):
         # Uniform
         uniform_palette = ColorReducer.generate_uniform_palette(num_colors)
         palette_options.append(("Uniform", uniform_palette))
+        
+        # Load custom palettes from palette.json
+        custom_palettes_data = self.palette_mgr.palettes
+        for palette_data in custom_palettes_data:
+            name = palette_data['name']
+            hex_colors = palette_data['colors']
+            rgb_colors = [self.palette_mgr._hex_to_rgb(c) for c in hex_colors]
+            palette_options.append((name, rgb_colors))
         
         # Radio buttons for selection
         selected_var = tk.StringVar(value="Median Cut")
@@ -486,13 +516,27 @@ class DitheringApp(ctk.CTk):
         
         threading.Thread(target=process, daemon=True).start()
     
+    def _apply_to_video_workflow(self):
+        """Handle the full video processing workflow - shows save dialog and processes."""
+        if not self.last_palette or not self.dithered_image:
+            messagebox.showwarning("No Palette", 
+                                 "Please apply dithering to preview frame first to select a palette.")
+            return
+        
+        # Show save dialog and process video
+        self._apply_to_video()
+    
     def _apply_to_video(self):
         """Apply processing to video."""
         if not self.video_path:
             return
         
+        # Generate default filename for video
+        default_video_name = self._generate_video_filename()
+        
         output_path = filedialog.asksaveasfilename(
             defaultextension=".mp4",
+            initialfile=default_video_name,
             filetypes=[("Video files", "*.mp4"), ("All files", "*.*")]
         )
         
@@ -520,14 +564,15 @@ class DitheringApp(ctk.CTk):
             )
             
             # Create pixelize function if pixelized image exists
+            # Note: Can't use lambdas here due to multiprocessing pickle issues
             pixelize_func = None
             if self.pixelized_image:
                 if self.last_pixelization_method == "neural":
-                    if self.neural_pix is None:
-                        self.neural_pix = NeuralPixelizer()
-                    pixelize_func = lambda img: self.neural_pix.pixelize(img, max_size)
+                    # Neural uses single-process mode (slower but prevents memory issues)
+                    pixelize_func = ("neural", max_size)
                 else:
-                    pixelize_func = lambda img: pixelize_regular(img, max_size)
+                    # Regular uses multi-process mode (fast)
+                    pixelize_func = ("regular", max_size)
             
             # Process video
             success = self.video_processor.process_video_streaming(
@@ -555,23 +600,33 @@ class DitheringApp(ctk.CTk):
     
     def _on_video_progress(self, fraction: float, message: str):
         """Callback for video processing progress."""
-        # Print to console (GUI progress dialog integration is TODO)
+        # Update status bar from main thread
+        progress_msg = f"{int(fraction * 100)}% - {message}"
+        self.after(0, lambda: self.status_bar.set_status(progress_msg))
+        # Also print to console
         print(f"Progress: {int(fraction * 100)}% - {message}")
     
     def save_image(self):
         """Save the current result."""
         if self.dithered_image:
             img_to_save = self.dithered_image
+            state = "dithered"
         elif self.pixelized_image:
             img_to_save = self.pixelized_image
+            state = "pixelized"
         elif self.current_image:
             img_to_save = self.current_image
+            state = "original"
         else:
             messagebox.showwarning("No Image", "No image to save.")
             return
         
+        # Generate default filename
+        default_filename = self._generate_filename(state)
+        
         filepath = filedialog.asksaveasfilename(
             defaultextension=".png",
+            initialfile=default_filename,
             filetypes=[
                 ("PNG files", "*.png"),
                 ("JPEG files", "*.jpg"),
@@ -586,7 +641,7 @@ class DitheringApp(ctk.CTk):
                 messagebox.showinfo("Success", f"Image saved:\n{filepath}")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to save image:\n{e}")
-    
+
     def fit_to_window(self):
         """Fit the current image to window."""
         self.image_viewer.fit_to_window()
@@ -611,12 +666,74 @@ class DitheringApp(ctk.CTk):
             self.image_viewer.set_image(self.pixelized_image)
             self.display_state = "pixelized"
             self.fit_to_window()
+    
+    def _generate_filename(self, state: str) -> str:
+        """Generate a default filename for saving."""
+        # Get base name from current file
+        if self.video_path and self.is_video:
+            base = Path(self.video_path).stem
+        elif self.current_image:
+            base = "image"
+        else:
+            base = "untitled"
+        
+        parts = [base]
+        
+        # Add state
+        if state == "pixelized":
+            parts.append("pixelized")
+        elif state == "dithered":
+            parts.append("dithered")
+            parts.append(self.dither_mode.get())
+        
+        # Add color count
+        try:
+            colors = int(self.colors_entry.get())
+            parts.append(f"{colors}colors")
+        except:
+            pass
+        
+        # Add gamma if enabled
+        if self.gamma_var.get():
+            parts.append("gamma")
+        
+        return "_".join(parts) + ".png"
+    
+    def _generate_video_filename(self) -> str:
+        """Generate a default filename for saving video."""
+        if self.video_path:
+            base = Path(self.video_path).stem
+        else:
+            base = "video"
+        
+        parts = [base]
+        
+        # Add processing info
+        if self.pixelized_image:
+            parts.append("pixelized")
+        
+        if self.dithered_image:
+            parts.append("dithered")
+            parts.append(self.dither_mode.get())
+        
+        # Add color count
+        try:
+            colors = int(self.colors_entry.get())
+            parts.append(f"{colors}colors")
+        except:
+            pass
+        
+        # Add gamma if enabled
+        if self.gamma_var.get():
+            parts.append("gamma")
+        
+        return "_".join(parts) + ".mp4"
 
 
 def main():
     """Launch the GUI application."""
-    app = DitheringApp()
-    app.mainloop()
+    app = DitheringApp()  # REMOVE 4 SPACES
+    app.mainloop()  # REMOVE 4 SPACES
 
 
 if __name__ == "__main__":

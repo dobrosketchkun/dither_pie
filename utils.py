@@ -251,6 +251,11 @@ class PaletteManager:
         self.palettes = []
         self.load()
     
+    @staticmethod
+    def _hex_to_rgb(hex_color: str) -> Tuple[int, int, int]:
+        """Convert hex color to RGB tuple."""
+        return hex_to_rgb(hex_color)
+    
     def load(self):
         """Load palettes from file."""
         self.palettes = load_palettes_from_file(self.filepath)

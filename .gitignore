@@ -1,2 +1,12 @@
 *.pth
 __pycache__/
+*.jpg
+*.png
+*.mp4
+*.avi
+*.mov
+*.webm
+*.gif
+*.webp
+*.jpeg
+*.bmp

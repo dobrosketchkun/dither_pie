@@ -185,20 +185,20 @@ class DitheringApp(ctk.CTk):
         row += 1
         
         # Load buttons
-        btn_load_img = ctk.CTkButton(
+        self.btn_load_img = ctk.CTkButton(
             self.sidebar,
             text="Load Image",
             command=self.load_image
         )
-        btn_load_img.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
+        self.btn_load_img.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
         row += 1
         
-        btn_load_video = ctk.CTkButton(
+        self.btn_load_video = ctk.CTkButton(
             self.sidebar,
             text="Load Video",
             command=self.load_video
         )
-        btn_load_video.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
+        self.btn_load_video.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
         row += 1
         
         # Random frame button (hidden by default)
@@ -227,20 +227,20 @@ class DitheringApp(ctk.CTk):
         row += 1
         
         # Pixelize buttons
-        btn_pixelize = ctk.CTkButton(
+        self.btn_pixelize = ctk.CTkButton(
             self.sidebar,
             text="Pixelize (Regular)",
             command=self._on_pixelize_regular
         )
-        btn_pixelize.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
+        self.btn_pixelize.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
         row += 1
         
-        btn_pixelize_neural = ctk.CTkButton(
+        self.btn_pixelize_neural = ctk.CTkButton(
             self.sidebar,
             text="Pixelize (Neural)",
             command=self._on_pixelize_neural
         )
-        btn_pixelize_neural.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
+        self.btn_pixelize_neural.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
         row += 1
         
         # Separator
@@ -301,12 +301,12 @@ class DitheringApp(ctk.CTk):
         row += 1
         
         # Dither button
-        btn_dither = ctk.CTkButton(
+        self.btn_dither = ctk.CTkButton(
             self.sidebar,
             text="Apply Dithering",
             command=self._on_apply_dithering
         )
-        btn_dither.grid(row=row, column=0, pady=10, padx=10, sticky='ew')
+        self.btn_dither.grid(row=row, column=0, pady=10, padx=10, sticky='ew')
         row += 1
         
         # Apply to Video button (hidden by default)
@@ -320,30 +320,30 @@ class DitheringApp(ctk.CTk):
         row += 1
         
         # Save button
-        btn_save = ctk.CTkButton(
+        self.btn_save = ctk.CTkButton(
             self.sidebar,
             text="Save Result",
             command=self.save_image
         )
-        btn_save.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
+        self.btn_save.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
         row += 1
         
         # Fit to window button
-        btn_fit = ctk.CTkButton(
+        self.btn_fit = ctk.CTkButton(
             self.sidebar,
             text="Fit to Window",
             command=self.fit_to_window
         )
-        btn_fit.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
+        self.btn_fit.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
         row += 1
         
         # Toggle view button
-        btn_toggle = ctk.CTkButton(
+        self.btn_toggle = ctk.CTkButton(
             self.sidebar,
             text="Toggle View",
             command=self.toggle_view
         )
-        btn_toggle.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
+        self.btn_toggle.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
         row += 1
     
     def _create_main_area(self):
@@ -364,6 +364,40 @@ class DitheringApp(ctk.CTk):
         """Create status bar at bottom."""
         self.status_bar = StatusBar(self)
         self.status_bar.grid(row=1, column=0, columnspan=2, sticky='ew', padx=10, pady=(0, 10))
+    
+    def _disable_controls(self):
+        """Disable all control buttons and inputs to prevent interaction during palette selection."""
+        self.btn_load_img.configure(state="disabled")
+        self.btn_load_video.configure(state="disabled")
+        self.random_frame_button.configure(state="disabled")
+        self.btn_pixelize.configure(state="disabled")
+        self.btn_pixelize_neural.configure(state="disabled")
+        self.btn_dither.configure(state="disabled")
+        self.apply_video_button.configure(state="disabled")
+        self.btn_save.configure(state="disabled")
+        self.btn_toggle.configure(state="disabled")
+        # Keep btn_fit enabled so user can fit preview to window while choosing palette
+        self.max_size_entry.configure(state="disabled")
+        self.colors_entry.configure(state="disabled")
+        self.final_size_entry.configure(state="disabled")
+        self.dither_dropdown.configure(state="disabled")
+    
+    def _enable_controls(self):
+        """Re-enable all control buttons and inputs after palette selection."""
+        self.btn_load_img.configure(state="normal")
+        self.btn_load_video.configure(state="normal")
+        self.random_frame_button.configure(state="normal")
+        self.btn_pixelize.configure(state="normal")
+        self.btn_pixelize_neural.configure(state="normal")
+        self.btn_dither.configure(state="normal")
+        self.apply_video_button.configure(state="normal")
+        self.btn_save.configure(state="normal")
+        self.btn_toggle.configure(state="normal")
+        self.btn_fit.configure(state="normal")  # Re-enable for consistency
+        self.max_size_entry.configure(state="normal")
+        self.colors_entry.configure(state="normal")
+        self.final_size_entry.configure(state="normal")
+        self.dither_dropdown.configure(state="normal")
     
     def load_image(self):
         """Load an image file."""
@@ -651,7 +685,9 @@ class DitheringApp(ctk.CTk):
             dialog.geometry(f"{dialog_w}x{dialog_h}")
         
         dialog.transient(self)
-        dialog.grab_set()
+        # Don't use grab_set() to allow user to zoom/pan preview in main window
+        # Instead, disable all control buttons to prevent unintended interactions
+        self._disable_controls()
         
         selected_palette = [None]  # Use list to allow modification in nested function
         
@@ -930,6 +966,8 @@ class DitheringApp(ctk.CTk):
                 self.dithered_image = preview_cache[cache_key]
                 self.display_state = "dithered"
             
+            # Re-enable controls before closing
+            self._enable_controls()
             dialog.destroy()
         
         def on_cancel():
@@ -941,6 +979,9 @@ class DitheringApp(ctk.CTk):
                 self.image_viewer.set_image(original_displayed_image, update=False)
                 self.fit_to_window()
             self.status_bar.set_status("Palette selection cancelled")
+            
+            # Re-enable controls before closing
+            self._enable_controls()
             dialog.destroy()
         
         # Handle window close (X button) same as Cancel

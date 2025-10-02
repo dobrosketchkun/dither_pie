@@ -703,6 +703,7 @@ class DitheringApp(ctk.CTk):
         # Cache for preview results
         preview_cache = {}
         is_generating = [False]  # Use list for mutable flag
+        first_preview = [True]  # Track if this is the first preview (to fit to window once)
         
         ctk.CTkLabel(dialog, text="Choose Palette:", 
                     font=("Arial", 14, "bold")).pack(pady=2)
@@ -825,9 +826,33 @@ class DitheringApp(ctk.CTk):
                 is_generating[0] = False
         
         def display_preview(preview_img):
-            """Display preview in the MAIN image viewer."""
-            self.image_viewer.set_image(preview_img, update=False)
-            self.fit_to_window()
+            """
+            Display preview in the MAIN image viewer.
+            Fits to window on first preview, then preserves zoom/pan on subsequent updates.
+            This allows user to zoom into a specific area and compare different palettes/gamma settings.
+            """
+            if first_preview[0]:
+                # First preview: fit to window for initial view
+                self.image_viewer.set_image(preview_img, update=False)
+                self.fit_to_window()
+                first_preview[0] = False
+            else:
+                # Subsequent previews: preserve zoom and pan position
+                # This allows examining the same area when toggling gamma or switching palettes
+                current_zoom = self.image_viewer.zoom_factor
+                current_offset_x = self.image_viewer.offset_x
+                current_offset_y = self.image_viewer.offset_y
+                
+                # Update the image
+                self.image_viewer.original_image = preview_img
+                
+                # Restore zoom/pan state
+                self.image_viewer.zoom_factor = current_zoom
+                self.image_viewer.offset_x = current_offset_x
+                self.image_viewer.offset_y = current_offset_y
+                
+                # Redraw with preserved state
+                self.image_viewer.update_view()
         
         def on_palette_selected(palette_name):
             """Callback when palette is selected - trigger preview generation."""

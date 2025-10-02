@@ -87,10 +87,17 @@ class DitheringApp(ctk.CTk):
         self._create_status_bar()
     
     def _create_sidebar(self):
-        """Create the control sidebar."""
-        self.sidebar = ctk.CTkFrame(self, width=300)
-        self.sidebar.grid(row=0, column=0, padx=10, pady=10, sticky='nsew')
-        self.sidebar.grid_rowconfigure(20, weight=1)
+        """Create the control sidebar with scrollable content."""
+        # Create outer frame to hold the scrollable frame
+        self.sidebar_frame = ctk.CTkFrame(self)
+        self.sidebar_frame.grid(row=0, column=0, padx=10, pady=10, sticky='nsew')
+        self.sidebar_frame.grid_rowconfigure(0, weight=1)
+        self.sidebar_frame.grid_columnconfigure(0, weight=1)
+        
+        # Create scrollable frame for all controls
+        # Let it size based on content, no fixed width
+        self.sidebar = ctk.CTkScrollableFrame(self.sidebar_frame)
+        self.sidebar.grid(row=0, column=0, sticky='nsew', padx=5, pady=5)
         
         row = 0
         

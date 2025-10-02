@@ -1369,7 +1369,7 @@ class DitheringApp(ctk.CTk):
             pass
         
         # Add gamma if enabled
-        if self.gamma_var.get():
+        if self.last_gamma:
             parts.append("gamma")
         
         return "_".join(parts) + ".png"
@@ -1399,7 +1399,7 @@ class DitheringApp(ctk.CTk):
             pass
         
         # Add gamma if enabled
-        if self.gamma_var.get():
+        if self.last_gamma:
             parts.append("gamma")
         
         return "_".join(parts) + ".mp4"

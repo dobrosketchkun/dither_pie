@@ -79,6 +79,13 @@ class DitheringApp(ctk.CTk):
         self.display_state = "current"  # Track what we're showing: "current", "pixelized", "dithered"
         self.original_size = None  # Store original image/video size (width, height)
         
+        # Pixelization cache tracking
+        self.pixelization_cache = {
+            "method": None,      # "regular" or "neural"
+            "max_size": None,    # The max_size parameter used
+            "source_hash": None  # Hash of source image to detect changes
+        }
+        
         # Palette manager
         self.palette_mgr = PaletteManager()
         
@@ -95,6 +102,62 @@ class DitheringApp(ctk.CTk):
         
         # Set up close handler to save config
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
+    
+    def _compute_image_hash(self, image: Image.Image) -> str:
+        """
+        Compute a simple hash of the image for cache invalidation.
+        Uses image size and a sample of pixels for speed.
+        """
+        import hashlib
+        # Combine size with a sample of pixel data
+        data = f"{image.size[0]}x{image.size[1]}"
+        # Sample some pixels for uniqueness (faster than hashing entire image)
+        arr = np.array(image)
+        sample = arr[::50, ::50].tobytes()  # Sample every 50th pixel
+        return hashlib.md5((data + str(sample[:1000])).encode()).hexdigest()
+    
+    def _is_pixelization_cached(self, method: str, max_size: int) -> bool:
+        """
+        Check if we can reuse the cached pixelized image.
+        Returns True if cache is valid, False if re-pixelization needed.
+        """
+        if self.pixelized_image is None:
+            return False
+        
+        if self.current_image is None:
+            return False
+        
+        # Check if parameters match
+        if self.pixelization_cache["method"] != method:
+            return False
+        
+        if self.pixelization_cache["max_size"] != max_size:
+            return False
+        
+        # Check if source image has changed
+        current_hash = self._compute_image_hash(self.current_image)
+        if self.pixelization_cache["source_hash"] != current_hash:
+            return False
+        
+        return True
+    
+    def _update_pixelization_cache(self, method: str, max_size: int):
+        """Update the pixelization cache after successful pixelization."""
+        if self.current_image:
+            self.pixelization_cache = {
+                "method": method,
+                "max_size": max_size,
+                "source_hash": self._compute_image_hash(self.current_image)
+            }
+    
+    def _invalidate_pixelization_cache(self):
+        """Clear the pixelization cache when source image changes."""
+        self.pixelization_cache = {
+            "method": None,
+            "max_size": None,
+            "source_hash": None
+        }
+        self.pixelized_image = None
     
     def _create_sidebar(self):
         """Create the control sidebar with scrollable content."""
@@ -333,11 +396,13 @@ class DitheringApp(ctk.CTk):
         
         try:
             self.current_image = Image.open(filepath).convert('RGB')
-            self.pixelized_image = None
             self.dithered_image = None
             self.is_video = False
             self.video_path = None
             self.display_state = "current"
+            
+            # Invalidate pixelization cache (new source image)
+            self._invalidate_pixelization_cache()
             
             # Store original size and update final size entry
             self.original_size = self.current_image.size  # (width, height)
@@ -387,11 +452,13 @@ class DitheringApp(ctk.CTk):
                 
                 self.current_image = Image.open(frame_path).convert('RGB')
             
-            self.pixelized_image = None
             self.dithered_image = None
             self.is_video = True
             self.video_path = filepath
             self.display_state = "current"
+            
+            # Invalidate pixelization cache (new source image)
+            self._invalidate_pixelization_cache()
             
             # Store original size and update final size entry
             self.original_size = self.current_image.size  # (width, height)
@@ -447,9 +514,11 @@ class DitheringApp(ctk.CTk):
                 self.current_image = Image.open(tmp_frame).convert('RGB')
             
             # Reset processing state
-            self.pixelized_image = None
             self.dithered_image = None
             self.display_state = "current"
+            
+            # Invalidate pixelization cache (new frame loaded)
+            self._invalidate_pixelization_cache()
             
             # Update display
             self.image_viewer.set_image(self.current_image)
@@ -473,6 +542,16 @@ class DitheringApp(ctk.CTk):
             messagebox.showerror("Invalid Input", "Please enter a valid positive integer for max size.")
             return
         
+        # Check if we can reuse cached result
+        if self._is_pixelization_cached("regular", max_size):
+            self.status_bar.set_status("✓ Using cached pixelization (no re-processing needed)")
+            self.last_pixelization_method = "regular"
+            self.dithered_image = None
+            self.display_state = "pixelized"
+            self.image_viewer.set_image(self.pixelized_image)
+            self.fit_to_window()
+            return
+        
         self.status_bar.set_status("Pixelizing...")
         
         # Use threading to prevent GUI freeze
@@ -481,6 +560,9 @@ class DitheringApp(ctk.CTk):
             self.last_pixelization_method = "regular"
             self.dithered_image = None
             self.display_state = "pixelized"
+            
+            # Update cache
+            self._update_pixelization_cache("regular", max_size)
             
             # Update GUI from main thread
             self.after(0, lambda: self.image_viewer.set_image(self.pixelized_image))
@@ -503,6 +585,16 @@ class DitheringApp(ctk.CTk):
             messagebox.showerror("Invalid Input", "Please enter a valid positive integer for max size.")
             return
         
+        # Check if we can reuse cached result
+        if self._is_pixelization_cached("neural", max_size):
+            self.status_bar.set_status("✓ Using cached neural pixelization (no re-processing needed)")
+            self.last_pixelization_method = "neural"
+            self.dithered_image = None
+            self.display_state = "pixelized"
+            self.image_viewer.set_image(self.pixelized_image)
+            self.fit_to_window()
+            return
+        
         self.status_bar.set_status("Neural pixelizing (this may take a moment)...")
         
         def process():
@@ -513,6 +605,9 @@ class DitheringApp(ctk.CTk):
             self.last_pixelization_method = "neural"
             self.dithered_image = None
             self.display_state = "pixelized"
+            
+            # Update cache
+            self._update_pixelization_cache("neural", max_size)
             
             self.after(0, lambda: self.image_viewer.set_image(self.pixelized_image))
             self.after(0, lambda: self.fit_to_window())

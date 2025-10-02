@@ -689,7 +689,14 @@ class ImageDitherer:
                 self.palette = ColorReducer.reduce_colors(image, self.num_colors)
             arr_for_dith = arr_srgb_8
 
+        # Convert palette to appropriate color space
         palette_arr = np.array(self.palette, dtype=np.float32)
+        if self.use_gamma:
+            # Palette is in sRGB (0-255), convert to linear space for accurate matching
+            palette_01 = palette_arr / 255.0
+            palette_lin_01 = DitherUtils.srgb_to_linear(palette_01)
+            palette_arr = np.clip(palette_lin_01 * 255.0, 0, 255).astype(np.float32)
+        
         h, w, _ = arr_for_dith.shape
         flat_pixels = arr_for_dith.reshape((-1, 3)).astype(np.float32)
 

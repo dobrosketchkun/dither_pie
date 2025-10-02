@@ -47,7 +47,11 @@ class ConfigManager:
         
         # UI component sizes
         "ui": {
-            "sidebar_width": 280
+            "sidebar_width": 280,
+            "palette_dialog_width": 400,
+            "palette_dialog_height": 600,
+            "palette_dialog_x": None,  # None means center on parent
+            "palette_dialog_y": None
         },
         
         # Recent files (keep last 10)

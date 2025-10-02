@@ -75,6 +75,7 @@ class DitheringApp(ctk.CTk):
         self.video_path = None
         self.is_video = False
         self.last_palette = None
+        self.last_gamma = False  # Track gamma setting from last dithering operation
         self.last_pixelization_method = "regular"
         self.display_state = "current"  # Track what we're showing: "current", "pixelized", "dithered"
         self.original_size = None  # Store original image/video size (width, height)
@@ -297,18 +298,6 @@ class DitheringApp(ctk.CTk):
         self.colors_entry = ctk.CTkEntry(self.sidebar, width=100)
         self.colors_entry.insert(0, str(self.config.get("defaults", "num_colors", default=16)))
         self.colors_entry.grid(row=row, column=0, pady=2, padx=10, sticky='w')
-        row += 1
-        
-        # Gamma correction
-        self.gamma_var = tk.BooleanVar(
-            value=self.config.get("defaults", "use_gamma", default=False)
-        )
-        gamma_check = ctk.CTkCheckBox(
-            self.sidebar,
-            text="Gamma Correction",
-            variable=self.gamma_var
-        )
-        gamma_check.grid(row=row, column=0, pady=5, padx=10, sticky='w')
         row += 1
         
         # Dither button
@@ -648,7 +637,19 @@ class DitheringApp(ctk.CTk):
         
         dialog = ctk.CTkToplevel(self)
         dialog.title("Select Palette - Live Preview in Main Window")
-        dialog.geometry("400x600")
+        
+        # Get size and position from config
+        dialog_w = self.config.get("ui", "palette_dialog_width", default=400)
+        dialog_h = self.config.get("ui", "palette_dialog_height", default=600)
+        dialog_x = self.config.get("ui", "palette_dialog_x")
+        dialog_y = self.config.get("ui", "palette_dialog_y")
+        
+        # Set geometry with position if available
+        if dialog_x is not None and dialog_y is not None:
+            dialog.geometry(f"{dialog_w}x{dialog_h}+{dialog_x}+{dialog_y}")
+        else:
+            dialog.geometry(f"{dialog_w}x{dialog_h}")
+        
         dialog.transient(self)
         dialog.grab_set()
         
@@ -673,14 +674,75 @@ class DitheringApp(ctk.CTk):
         ctk.CTkLabel(dialog, text="Preview shows in main window →", 
                     font=("Arial", 11), text_color="gray").pack(pady=(0, 2))
         
+        # Gamma correction checkbox in dialog
+        gamma_var = tk.BooleanVar(value=self.config.get("defaults", "use_gamma", default=False))
+        
+        gamma_frame = ctk.CTkFrame(dialog)
+        gamma_frame.pack(fill="x", padx=10, pady=5)
+        
+        gamma_check = ctk.CTkCheckBox(
+            gamma_frame,
+            text="Gamma Correction",
+            variable=gamma_var,
+            command=lambda: on_gamma_changed()
+        )
+        gamma_check.pack(side="left", padx=5)
+        
+        ctk.CTkLabel(
+            gamma_frame,
+            text="(affects color accuracy)",
+            font=("Arial", 10),
+            text_color="gray"
+        ).pack(side="left", padx=5)
+        
+        # Track currently displayed palette for gamma refresh
+        current_palette_name = [None]
+        current_palette_data = [None]
+        
+        def save_dialog_size():
+            """Save the current dialog size and position to config."""
+            try:
+                # Get current geometry
+                geometry = dialog.geometry()
+                # Parse WxH+X+Y format
+                parts = geometry.split('+')
+                size_part = parts[0]
+                w, h = size_part.split('x')
+                
+                # Save size
+                self.config.set("ui", "palette_dialog_width", value=int(w))
+                self.config.set("ui", "palette_dialog_height", value=int(h))
+                
+                # Save position if available
+                if len(parts) >= 3:
+                    self.config.set("ui", "palette_dialog_x", value=int(parts[1]))
+                    self.config.set("ui", "palette_dialog_y", value=int(parts[2]))
+            except Exception as e:
+                print(f"Error saving dialog size/position: {e}")
+        
+        def on_gamma_changed():
+            """Regenerate preview when gamma checkbox is toggled."""
+            # Clear cache since gamma affects results
+            preview_cache.clear()
+            
+            # Regenerate current preview if one is selected
+            if current_palette_name[0] and current_palette_data[0]:
+                threading.Thread(
+                    target=lambda: generate_preview(current_palette_name[0], current_palette_data[0]),
+                    daemon=True
+                ).start()
+        
         def generate_preview(palette_name, palette):
             """Generate preview and display in MAIN viewer window."""
             if is_generating[0]:
                 return  # Skip if already generating
             
+            # Create cache key that includes gamma state
+            cache_key = f"{palette_name}_gamma{gamma_var.get()}"
+            
             # Check cache first
-            if palette_name in preview_cache:
-                self.after(0, lambda: display_preview(preview_cache[palette_name]))
+            if cache_key in preview_cache:
+                self.after(0, lambda: display_preview(preview_cache[cache_key]))
                 self.after(0, lambda: self.status_bar.set_status(f"Preview: {palette_name} (cached)"))
                 return
             
@@ -688,18 +750,22 @@ class DitheringApp(ctk.CTk):
             self.after(0, lambda: self.status_bar.set_status(f"Generating preview: {palette_name}..."))
             
             try:
+                # Store current palette info for gamma refresh
+                current_palette_name[0] = palette_name
+                current_palette_data[0] = palette
+                
                 # Get current dither mode
                 try:
                     dither_mode = DitherMode(self.dither_mode.get())
                 except:
                     dither_mode = DitherMode.BAYER4x4
                 
-                # Create ditherer
+                # Create ditherer with gamma from dialog
                 ditherer = ImageDitherer(
                     num_colors=num_colors,
                     dither_mode=dither_mode,
                     palette=palette,
-                    use_gamma=self.gamma_var.get()
+                    use_gamma=gamma_var.get()
                 )
                 
                 # Apply dithering to source image (full resolution!)
@@ -708,12 +774,13 @@ class DitheringApp(ctk.CTk):
                 # Apply final resize if enabled
                 preview_result = self._apply_final_resize(preview_result)
                 
-                # Cache the result
-                preview_cache[palette_name] = preview_result
+                # Cache the result with gamma in key
+                preview_cache[cache_key] = preview_result
                 
                 # Display in MAIN viewer
                 self.after(0, lambda: display_preview(preview_result))
-                self.after(0, lambda: self.status_bar.set_status(f"Preview: {palette_name}"))
+                gamma_text = " (gamma)" if gamma_var.get() else ""
+                self.after(0, lambda: self.status_bar.set_status(f"Preview: {palette_name}{gamma_text}"))
                 
             except Exception as e:
                 print(f"Preview generation error: {e}")
@@ -846,6 +913,9 @@ class DitheringApp(ctk.CTk):
         ).pack(side="left", padx=2, fill='x', expand=True)
         
         def on_ok():
+            # Save dialog size before closing
+            save_dialog_size()
+            
             # Find selected palette
             sel_name = selected_var.get()
             for name, palette in palette_options:
@@ -855,13 +925,17 @@ class DitheringApp(ctk.CTk):
             
             # The preview is already showing in the main window
             # If it's cached, use that, otherwise it will be generated below
-            if sel_name in preview_cache:
-                self.dithered_image = preview_cache[sel_name]
+            cache_key = f"{sel_name}_gamma{gamma_var.get()}"
+            if cache_key in preview_cache:
+                self.dithered_image = preview_cache[cache_key]
                 self.display_state = "dithered"
             
             dialog.destroy()
         
         def on_cancel():
+            # Save dialog size before closing
+            save_dialog_size()
+            
             # Restore original display
             if original_displayed_image:
                 self.image_viewer.set_image(original_displayed_image)
@@ -884,8 +958,12 @@ class DitheringApp(ctk.CTk):
         if selected_palette[0] is None:
             return  # User cancelled
         
-        # Store the palette for video processing
+        # Store the palette and gamma setting for video processing
         self.last_palette = selected_palette[0]
+        self.last_gamma = gamma_var.get()
+        
+        # Save gamma to config as default for next time
+        self.config.set("defaults", "use_gamma", value=gamma_var.get())
         
         # If we already have the result cached from preview, we're done!
         # The on_ok() already set self.dithered_image from cache
@@ -904,7 +982,7 @@ class DitheringApp(ctk.CTk):
                     num_colors=num_colors,
                     dither_mode=dither_mode,
                     palette=selected_palette[0],
-                    use_gamma=self.gamma_var.get()
+                    use_gamma=gamma_var.get()
                 )
                 
                 # Use pixelized image if available, otherwise use current image
@@ -973,7 +1051,7 @@ class DitheringApp(ctk.CTk):
                 num_colors=num_colors,
                 dither_mode=dither_mode,
                 palette=self.last_palette,
-                use_gamma=self.gamma_var.get()
+                use_gamma=self.last_gamma
             )
             
             # Create pixelize function if pixelized image exists
@@ -1352,7 +1430,7 @@ class DitheringApp(ctk.CTk):
                 pass
             
             self.config.set("defaults", "dither_mode", value=self.dither_mode.get())
-            self.config.set("defaults", "use_gamma", value=self.gamma_var.get())
+            # Gamma is saved when user selects it in the palette dialog
             self.config.set("defaults", "final_resize_enabled", value=self.final_resize_var.get())
             
             # Save configuration to file

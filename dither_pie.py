@@ -43,10 +43,7 @@ from utils import (
     validate_video_file,
     validate_image_file
 )
-
-# Set appearance
-ctk.set_appearance_mode("system")
-ctk.set_default_color_theme("blue")
+from config_manager import ConfigManager
 
 
 class DitheringApp(ctk.CTk):
@@ -57,8 +54,15 @@ class DitheringApp(ctk.CTk):
     def __init__(self):
         super().__init__()
         
+        # Load configuration
+        self.config = ConfigManager()
+        
+        # Apply theme settings
+        ctk.set_appearance_mode(self.config.get("theme", "appearance_mode", default="system"))
+        ctk.set_default_color_theme(self.config.get("theme", "color_theme", default="blue"))
+        
         self.title("Image Dithering Tool")
-        self.geometry("1400x900")
+        self.geometry(self.config.get_window_geometry())
         
         # Configure grid
         self.grid_rowconfigure(0, weight=1)
@@ -88,6 +92,9 @@ class DitheringApp(ctk.CTk):
         self._create_sidebar()
         self._create_main_area()
         self._create_status_bar()
+        
+        # Set up close handler to save config
+        self.protocol("WM_DELETE_WINDOW", self._on_closing)
     
     def _create_sidebar(self):
         """Create the control sidebar with scrollable content."""
@@ -151,7 +158,7 @@ class DitheringApp(ctk.CTk):
         row += 1
         
         self.max_size_entry = ctk.CTkEntry(self.sidebar, width=100)
-        self.max_size_entry.insert(0, "640")
+        self.max_size_entry.insert(0, str(self.config.get("defaults", "max_size", default=640)))
         self.max_size_entry.grid(row=row, column=0, pady=2, padx=10, sticky='w')
         row += 1
         
@@ -179,7 +186,9 @@ class DitheringApp(ctk.CTk):
         row += 1
         
         # Final resize checkbox and size entry
-        self.final_resize_var = tk.BooleanVar(value=False)
+        self.final_resize_var = tk.BooleanVar(
+            value=self.config.get("defaults", "final_resize_enabled", default=False)
+        )
         final_resize_check = ctk.CTkCheckBox(
             self.sidebar,
             text="Upscale to original size",
@@ -192,7 +201,7 @@ class DitheringApp(ctk.CTk):
         row += 1
         
         self.final_size_entry = ctk.CTkEntry(self.sidebar, width=100)
-        self.final_size_entry.insert(0, "1920")
+        self.final_size_entry.insert(0, str(self.config.get("defaults", "final_size", default=1920)))
         self.final_size_entry.grid(row=row, column=0, pady=2, padx=10, sticky='w')
         row += 1
         
@@ -206,7 +215,9 @@ class DitheringApp(ctk.CTk):
         ctk.CTkLabel(self.sidebar, text="Dither Mode:").grid(row=row, column=0, pady=2, padx=10, sticky='w')
         row += 1
         
-        self.dither_mode = ctk.StringVar(value="bayer4x4")
+        self.dither_mode = ctk.StringVar(
+            value=self.config.get("defaults", "dither_mode", default="bayer4x4")
+        )
         dither_modes = [mode.value for mode in DitherMode]
         self.dither_dropdown = ctk.CTkOptionMenu(
             self.sidebar,
@@ -221,12 +232,14 @@ class DitheringApp(ctk.CTk):
         row += 1
         
         self.colors_entry = ctk.CTkEntry(self.sidebar, width=100)
-        self.colors_entry.insert(0, "16")
+        self.colors_entry.insert(0, str(self.config.get("defaults", "num_colors", default=16)))
         self.colors_entry.grid(row=row, column=0, pady=2, padx=10, sticky='w')
         row += 1
         
         # Gamma correction
-        self.gamma_var = tk.BooleanVar(value=False)
+        self.gamma_var = tk.BooleanVar(
+            value=self.config.get("defaults", "use_gamma", default=False)
+        )
         gamma_check = ctk.CTkCheckBox(
             self.sidebar,
             text="Gamma Correction",
@@ -302,7 +315,9 @@ class DitheringApp(ctk.CTk):
     
     def load_image(self):
         """Load an image file."""
+        initial_dir = self.config.get_last_path("image")
         filepath = filedialog.askopenfilename(
+            initialdir=initial_dir,
             filetypes=[
                 ("Image files", "*.png *.jpg *.jpeg *.gif *.bmp"),
                 ("All files", "*.*")
@@ -311,6 +326,10 @@ class DitheringApp(ctk.CTk):
         
         if not filepath:
             return
+        
+        # Remember this directory
+        self.config.update_last_path("image", filepath)
+        self.config.add_recent_file(filepath)
         
         try:
             self.current_image = Image.open(filepath).convert('RGB')
@@ -339,7 +358,9 @@ class DitheringApp(ctk.CTk):
     
     def load_video(self):
         """Load a video file (first frame for preview)."""
+        initial_dir = self.config.get_last_path("video")
         filepath = filedialog.askopenfilename(
+            initialdir=initial_dir,
             filetypes=[
                 ("Video files", "*.mp4 *.avi *.mov *.mkv"),
                 ("All files", "*.*")
@@ -348,6 +369,10 @@ class DitheringApp(ctk.CTk):
         
         if not filepath:
             return
+        
+        # Remember this directory
+        self.config.update_last_path("video", filepath)
+        self.config.add_recent_file(filepath)
         
         try:
             # Extract first frame for preview
@@ -696,7 +721,9 @@ class DitheringApp(ctk.CTk):
         # Generate default filename for video
         default_video_name = self._generate_video_filename()
         
+        initial_dir = self.config.get_last_path("save")
         output_path = filedialog.asksaveasfilename(
+            initialdir=initial_dir,
             defaultextension=".mp4",
             initialfile=default_video_name,
             filetypes=[("Video files", "*.mp4"), ("All files", "*.*")]
@@ -704,6 +731,9 @@ class DitheringApp(ctk.CTk):
         
         if not output_path:
             return
+        
+        # Remember this directory
+        self.config.update_last_path("save", output_path)
         
         # Get parameters
         try:
@@ -796,7 +826,9 @@ class DitheringApp(ctk.CTk):
         # Generate default filename
         default_filename = self._generate_filename(state)
         
+        initial_dir = self.config.get_last_path("save")
         filepath = filedialog.asksaveasfilename(
+            initialdir=initial_dir,
             defaultextension=".png",
             initialfile=default_filename,
             filetypes=[
@@ -807,6 +839,8 @@ class DitheringApp(ctk.CTk):
         )
         
         if filepath:
+            # Remember this directory
+            self.config.update_last_path("save", filepath)
             try:
                 img_to_save.save(filepath)
                 self.status_bar.set_status(f"Saved: {Path(filepath).name}")
@@ -1070,6 +1104,43 @@ class DitheringApp(ctk.CTk):
             parts.append("gamma")
         
         return "_".join(parts) + ".mp4"
+    
+    def _on_closing(self):
+        """Handle window close event - save configuration."""
+        try:
+            # Save window geometry
+            geometry = self.geometry()
+            # Check if maximized (state returns 'zoomed' on Windows when maximized)
+            is_maximized = self.state() == 'zoomed'
+            self.config.save_window_geometry(geometry, is_maximized)
+            
+            # Save current settings as defaults
+            try:
+                self.config.set("defaults", "max_size", value=int(self.max_size_entry.get()))
+            except:
+                pass
+            
+            try:
+                self.config.set("defaults", "num_colors", value=int(self.colors_entry.get()))
+            except:
+                pass
+            
+            try:
+                self.config.set("defaults", "final_size", value=int(self.final_size_entry.get()))
+            except:
+                pass
+            
+            self.config.set("defaults", "dither_mode", value=self.dither_mode.get())
+            self.config.set("defaults", "use_gamma", value=self.gamma_var.get())
+            self.config.set("defaults", "final_resize_enabled", value=self.final_resize_var.get())
+            
+            # Save configuration to file
+            self.config.save()
+        except Exception as e:
+            print(f"Error saving config: {e}")
+        
+        # Close the application
+        self.destroy()
 
 
 def main():

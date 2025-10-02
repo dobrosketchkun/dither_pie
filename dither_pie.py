@@ -668,10 +668,10 @@ class DitheringApp(ctk.CTk):
         is_generating = [False]  # Use list for mutable flag
         
         ctk.CTkLabel(dialog, text="Choose Palette:", 
-                    font=("Arial", 14, "bold")).pack(pady=10)
+                    font=("Arial", 14, "bold")).pack(pady=2)
         
         ctk.CTkLabel(dialog, text="Preview shows in main window →", 
-                    font=("Arial", 11), text_color="gray").pack(pady=(0, 10))
+                    font=("Arial", 11), text_color="gray").pack(pady=(0, 2))
         
         def generate_preview(palette_name, palette):
             """Generate preview and display in MAIN viewer window."""

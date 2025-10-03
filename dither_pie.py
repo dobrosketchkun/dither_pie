@@ -666,6 +666,9 @@ class DitheringApp(ctk.CTk):
         # Use pixelized image if available, otherwise use current image
         source_image = self.pixelized_image if self.pixelized_image else self.current_image
         
+        # Apply final resize BEFORE dithering to ensure dither pattern matches final resolution
+        source_image = self._apply_final_resize(source_image)
+        
         # Show palette selection dialog
         from gui_components import PalettePreview, CustomPaletteCreator, PaletteImagePreviewDialog
         
@@ -805,11 +808,8 @@ class DitheringApp(ctk.CTk):
                     use_gamma=gamma_var.get()
                 )
                 
-                # Apply dithering to source image (full resolution!)
+                # Apply dithering to source image (already resized if needed)
                 preview_result = ditherer.apply_dithering(source_image)
-                
-                # Apply final resize if enabled
-                preview_result = self._apply_final_resize(preview_result)
                 
                 # Cache the result with gamma in key
                 preview_cache[cache_key] = preview_result
@@ -1053,10 +1053,9 @@ class DitheringApp(ctk.CTk):
                 
                 # Use pixelized image if available, otherwise use current image
                 source_for_dithering = self.pixelized_image if self.pixelized_image else self.current_image
+                # Apply final resize BEFORE dithering
+                source_for_dithering = self._apply_final_resize(source_for_dithering)
                 self.dithered_image = ditherer.apply_dithering(source_for_dithering)
-                
-                # Apply final resize if enabled
-                self.dithered_image = self._apply_final_resize(self.dithered_image)
                 self.display_state = "dithered"
                 
                 self.after(0, lambda: self.image_viewer.set_image(self.dithered_image, update=False))

@@ -160,6 +160,31 @@ class DitheringApp(ctk.CTk):
         }
         self.pixelized_image = None
     
+    def _update_resize_preview(self):
+        """Update the resize preview label showing resulting dimensions."""
+        if not self.final_resize_var.get():
+            self.resize_preview_label.configure(text="")
+            return
+        
+        # Get current image to show what size it would become
+        current_img = self.dithered_image or self.pixelized_image or self.current_image
+        if not current_img:
+            self.resize_preview_label.configure(text="")
+            return
+        
+        try:
+            multiplier = int(self.resize_multiplier_entry.get())
+            if multiplier <= 0:
+                raise ValueError
+            
+            w, h = current_img.size
+            new_w = w * multiplier
+            new_h = h * multiplier
+            
+            self.resize_preview_label.configure(text=f"Result: {new_w} × {new_h}")
+        except:
+            self.resize_preview_label.configure(text="Invalid multiplier")
+    
     def _create_sidebar(self):
         """Create the control sidebar with scrollable content."""
         # Create outer frame to hold the scrollable frame
@@ -245,33 +270,54 @@ class DitheringApp(ctk.CTk):
         
         # Separator
         ctk.CTkLabel(self.sidebar, text="Final Resize", font=("Arial", 14, "bold")).grid(
-            row=row, column=0, pady=(15, 5), padx=10
+            row=row, column=0, pady=(15, 2), padx=10
         )
         row += 1
         
-        # Final resize checkbox and size entry
+        # Final resize checkbox
         self.final_resize_var = tk.BooleanVar(
             value=self.config.get("defaults", "final_resize_enabled", default=False)
         )
         final_resize_check = ctk.CTkCheckBox(
             self.sidebar,
-            text="Upscale to original size",
-            variable=self.final_resize_var
+            text="Upscale by integer multiple",
+            variable=self.final_resize_var,
+            command=self._update_resize_preview
         )
-        final_resize_check.grid(row=row, column=0, pady=5, padx=10, sticky='w')
+        final_resize_check.grid(row=row, column=0, pady=2, padx=10, sticky='w')
         row += 1
         
-        ctk.CTkLabel(self.sidebar, text="Target Size (larger dim):").grid(row=row, column=0, pady=2, padx=10, sticky='w')
+        # Multiplier spinbox
+        ctk.CTkLabel(self.sidebar, text="Multiplier:").grid(row=row, column=0, pady=1, padx=10, sticky='w')
         row += 1
         
-        self.final_size_entry = ctk.CTkEntry(self.sidebar, width=100)
-        self.final_size_entry.insert(0, str(self.config.get("defaults", "final_size", default=1920)))
-        self.final_size_entry.grid(row=row, column=0, pady=2, padx=10, sticky='w')
+        self.resize_multiplier_entry = tk.Spinbox(
+            self.sidebar,
+            from_=1,
+            to=10,
+            width=10,
+            command=self._update_resize_preview,
+            font=("Arial", 11)
+        )
+        self.resize_multiplier_entry.delete(0, tk.END)
+        self.resize_multiplier_entry.insert(0, str(self.config.get("defaults", "resize_multiplier", default=2)))
+        self.resize_multiplier_entry.bind("<KeyRelease>", lambda e: self._update_resize_preview())
+        self.resize_multiplier_entry.grid(row=row, column=0, pady=1, padx=10, sticky='w')
+        row += 1
+        
+        # Preview label showing resulting size
+        self.resize_preview_label = ctk.CTkLabel(
+            self.sidebar, 
+            text="",
+            font=("Arial", 11, "bold"),
+            text_color="#4a9eff"
+        )
+        self.resize_preview_label.grid(row=row, column=0, pady=(1,2), padx=10, sticky='w')
         row += 1
         
         # Separator
         ctk.CTkLabel(self.sidebar, text="Dithering", font=("Arial", 14, "bold")).grid(
-            row=row, column=0, pady=(15, 5), padx=10
+            row=row, column=0, pady=(8, 5), padx=10
         )
         row += 1
         
@@ -379,7 +425,7 @@ class DitheringApp(ctk.CTk):
         # Keep btn_fit enabled so user can fit preview to window while choosing palette
         self.max_size_entry.configure(state="disabled")
         self.colors_entry.configure(state="disabled")
-        self.final_size_entry.configure(state="disabled")
+        self.resize_multiplier_entry.configure(state="disabled")
         self.dither_dropdown.configure(state="disabled")
     
     def _enable_controls(self):
@@ -396,7 +442,7 @@ class DitheringApp(ctk.CTk):
         self.btn_fit.configure(state="normal")  # Re-enable for consistency
         self.max_size_entry.configure(state="normal")
         self.colors_entry.configure(state="normal")
-        self.final_size_entry.configure(state="normal")
+        self.resize_multiplier_entry.configure(state="normal")
         self.dither_dropdown.configure(state="normal")
     
     def load_image(self):
@@ -427,11 +473,8 @@ class DitheringApp(ctk.CTk):
             # Invalidate pixelization cache (new source image)
             self._invalidate_pixelization_cache()
             
-            # Store original size and update final size entry
+            # Store original size
             self.original_size = self.current_image.size  # (width, height)
-            larger_dim = max(self.original_size)
-            self.final_size_entry.delete(0, tk.END)
-            self.final_size_entry.insert(0, str(larger_dim))
             
             # Hide video buttons
             self.apply_video_button.grid_remove()
@@ -483,11 +526,8 @@ class DitheringApp(ctk.CTk):
             # Invalidate pixelization cache (new source image)
             self._invalidate_pixelization_cache()
             
-            # Store original size and update final size entry
+            # Store original size
             self.original_size = self.current_image.size  # (width, height)
-            larger_dim = max(self.original_size)
-            self.final_size_entry.delete(0, tk.END)
-            self.final_size_entry.insert(0, str(larger_dim))
             
             # Show video buttons
             self.apply_video_button.grid()
@@ -591,6 +631,7 @@ class DitheringApp(ctk.CTk):
             self.after(0, lambda: self.image_viewer.set_image(self.pixelized_image, update=False))
             self.after(0, lambda: self.fit_to_window())
             self.after(0, lambda: self.status_bar.set_status("Pixelization complete"))
+            self.after(0, lambda: self._update_resize_preview())
         
         threading.Thread(target=process, daemon=True).start()
     
@@ -635,6 +676,7 @@ class DitheringApp(ctk.CTk):
             self.after(0, lambda: self.image_viewer.set_image(self.pixelized_image, update=False))
             self.after(0, lambda: self.fit_to_window())
             self.after(0, lambda: self.status_bar.set_status("Neural pixelization complete"))
+            self.after(0, lambda: self._update_resize_preview())
         
         threading.Thread(target=process, daemon=True).start()
     
@@ -665,9 +707,6 @@ class DitheringApp(ctk.CTk):
         
         # Use pixelized image if available, otherwise use current image
         source_image = self.pixelized_image if self.pixelized_image else self.current_image
-        
-        # Apply final resize BEFORE dithering to ensure dither pattern matches final resolution
-        source_image = self._apply_final_resize(source_image)
         
         # Show palette selection dialog
         from gui_components import PalettePreview, CustomPaletteCreator, PaletteImagePreviewDialog
@@ -808,8 +847,10 @@ class DitheringApp(ctk.CTk):
                     use_gamma=gamma_var.get()
                 )
                 
-                # Apply dithering to source image (already resized if needed)
+                # Apply dithering to source image
                 preview_result = ditherer.apply_dithering(source_image)
+                # NOTE: Do NOT apply final_resize here - we want to see the actual dithered pixels
+                # Final resize should only happen when saving
                 
                 # Cache the result with gamma in key
                 preview_cache[cache_key] = preview_result
@@ -993,6 +1034,7 @@ class DitheringApp(ctk.CTk):
             
             # Re-enable controls before closing
             self._enable_controls()
+            self._update_resize_preview()
             dialog.destroy()
         
         def on_cancel():
@@ -1053,9 +1095,9 @@ class DitheringApp(ctk.CTk):
                 
                 # Use pixelized image if available, otherwise use current image
                 source_for_dithering = self.pixelized_image if self.pixelized_image else self.current_image
-                # Apply final resize BEFORE dithering
-                source_for_dithering = self._apply_final_resize(source_for_dithering)
                 self.dithered_image = ditherer.apply_dithering(source_for_dithering)
+                # NOTE: Do NOT apply final_resize here - keep dithered image at its actual resolution
+                # Final resize should only happen when saving
                 self.display_state = "dithered"
                 
                 self.after(0, lambda: self.image_viewer.set_image(self.dithered_image, update=False))
@@ -1132,12 +1174,12 @@ class DitheringApp(ctk.CTk):
             
             # Get final resize parameters
             final_resize_enabled = self.final_resize_var.get()
-            final_target_size = None
+            final_resize_multiplier = None
             if final_resize_enabled:
                 try:
-                    final_target_size = int(self.final_size_entry.get())
+                    final_resize_multiplier = int(self.resize_multiplier_entry.get())
                 except:
-                    final_target_size = None
+                    final_resize_multiplier = None
             
             # Process video
             success = self.video_processor.process_video_streaming(
@@ -1145,7 +1187,7 @@ class DitheringApp(ctk.CTk):
                 output_path,
                 ditherer,
                 pixelize_func=pixelize_func,
-                final_resize_target=final_target_size
+                final_resize_target=final_resize_multiplier
             )
             
             # Show result
@@ -1206,7 +1248,9 @@ class DitheringApp(ctk.CTk):
             # Remember this directory
             self.config.update_last_path("save", filepath)
             try:
-                img_to_save.save(filepath)
+                # Apply final resize if enabled before saving
+                final_image = self._apply_final_resize(img_to_save)
+                final_image.save(filepath)
                 self.status_bar.set_status(f"Saved: {Path(filepath).name}")
                 messagebox.showinfo("Success", f"Image saved:\n{filepath}")
             except Exception as e:
@@ -1365,9 +1409,8 @@ class DitheringApp(ctk.CTk):
     
     def _apply_final_resize(self, image: Image.Image) -> Image.Image:
         """
-        Apply final resize to original size using nearest-neighbor interpolation.
-        This preserves the pixelated look when upscaling.
-        Ensures dimensions are even for video codec compatibility.
+        Apply final resize using integer multiplication for perfect pixel scaling.
+        This preserves the dithering pattern without deformation.
         
         Args:
             image: The processed image to resize
@@ -1378,30 +1421,18 @@ class DitheringApp(ctk.CTk):
         if not self.final_resize_var.get():
             return image
         
+        # Get integer multiplier
         try:
-            target_size = int(self.final_size_entry.get())
-            if target_size <= 0:
-                return image
+            multiplier = int(self.resize_multiplier_entry.get())
+            if multiplier <= 0:
+                raise ValueError
         except:
             return image
         
+        # Apply integer multiplication for perfect scaling
         current_w, current_h = image.size
-        
-        # Calculate new dimensions maintaining aspect ratio
-        if current_w >= current_h:
-            # Landscape: target_size is for width
-            new_w = target_size
-            new_h = int(round((current_h / current_w) * target_size))
-        else:
-            # Portrait: target_size is for height
-            new_h = target_size
-            new_w = int(round((current_w / current_h) * target_size))
-        
-        # Ensure dimensions are even (required for libx264 yuv420p when saving as video)
-        if new_w % 2 != 0:
-            new_w += 1
-        if new_h % 2 != 0:
-            new_h += 1
+        new_w = current_w * multiplier
+        new_h = current_h * multiplier
         
         # Use NEAREST to preserve pixelated look
         resized = image.resize((new_w, new_h), Image.Resampling.NEAREST)
@@ -1490,7 +1521,7 @@ class DitheringApp(ctk.CTk):
                 pass
             
             try:
-                self.config.set("defaults", "final_size", value=int(self.final_size_entry.get()))
+                self.config.set("defaults", "resize_multiplier", value=int(self.resize_multiplier_entry.get()))
             except:
                 pass
             

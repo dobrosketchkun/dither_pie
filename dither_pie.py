@@ -1187,7 +1187,7 @@ class DitheringApp(ctk.CTk):
                 output_path,
                 ditherer,
                 pixelize_func=pixelize_func,
-                final_resize_target=final_resize_multiplier
+                final_resize_multiplier=final_resize_multiplier
             )
             
             # Show result

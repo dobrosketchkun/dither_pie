@@ -10,3 +10,4 @@ __pycache__/
 *.webp
 *.jpeg
 *.bmp
+*_backup.py

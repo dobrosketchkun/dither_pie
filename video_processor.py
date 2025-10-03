@@ -169,7 +169,7 @@ class VideoProcessor:
                                 ditherer: ImageDitherer,
                                 pixelize_func: Optional[Callable[[Image.Image], Image.Image]] = None,
                                 batch_size: int = 15,
-                                final_resize_target: Optional[int] = None) -> bool:
+                                final_resize_multiplier: Optional[int] = None) -> bool:
         """
         Process video using streaming approach with batched multiprocessing.
         Much faster than frame-by-frame extraction.
@@ -180,7 +180,7 @@ class VideoProcessor:
             ditherer: ImageDitherer instance
             pixelize_func: Optional function to pixelize frames before dithering
             batch_size: Number of frames to process in each batch (reduced to 15 to prevent freeze)
-            final_resize_target: Optional target size (larger dimension) for final upscale using nearest-neighbor
+            final_resize_multiplier: Optional integer multiplier for final upscale using nearest-neighbor
             
         Returns:
             True if successful, False otherwise
@@ -252,8 +252,8 @@ class VideoProcessor:
                                 # Apply dithering
                                 dithered = ditherer.apply_dithering(img)
                                 # Apply final resize if specified
-                                if final_resize_target:
-                                    dithered = _apply_final_resize_to_frame(dithered, final_resize_target)
+                                if final_resize_multiplier:
+                                    dithered = _apply_final_resize_to_frame(dithered, final_resize_multiplier)
                                 # Save back
                                 dithered.save(frame_file)
                                 
@@ -295,7 +295,7 @@ class VideoProcessor:
                             ditherer=ditherer,
                             pixelize_method=pixelize_method,
                             max_size=max_size,
-                            final_resize_target=final_resize_target
+                            final_resize_multiplier=final_resize_multiplier
                         )
                         
                         # Process batch in parallel
@@ -310,7 +310,7 @@ class VideoProcessor:
                                 # Retry up to 2 more times
                                 retry_success = False
                                 for retry in range(2):
-                                    if _process_single_frame(frame_path, ditherer, pixelize_method, max_size, final_resize_target):
+                                    if _process_single_frame(frame_path, ditherer, pixelize_method, max_size, final_resize_multiplier):
                                         retry_success = True
                                         break
                                 if not retry_success:
@@ -371,30 +371,24 @@ class VideoProcessor:
             return False
 
 
-def _apply_final_resize_to_frame(image: Image.Image, target_size: int) -> Image.Image:
+def _apply_final_resize_to_frame(image: Image.Image, multiplier: int) -> Image.Image:
     """
-    Apply final resize to image using nearest-neighbor interpolation.
+    Apply final resize to image using integer multiplication and nearest-neighbor interpolation.
     This preserves the pixelated look when upscaling.
     Ensures dimensions are even for video codec compatibility.
     
     Args:
         image: The processed image to resize
-        target_size: Target size for the larger dimension
+        multiplier: Integer multiplier to scale the image by
         
     Returns:
         Resized image with even dimensions
     """
     current_w, current_h = image.size
     
-    # Calculate new dimensions maintaining aspect ratio
-    if current_w >= current_h:
-        # Landscape: target_size is for width
-        new_w = target_size
-        new_h = int(round((current_h / current_w) * target_size))
-    else:
-        # Portrait: target_size is for height
-        new_h = target_size
-        new_w = int(round((current_w / current_h) * target_size))
+    # Apply integer multiplication for perfect scaling
+    new_w = current_w * multiplier
+    new_h = current_h * multiplier
     
     # Ensure dimensions are even (required for libx264 yuv420p)
     if new_w % 2 != 0:
@@ -411,7 +405,7 @@ def _process_single_frame(frame_path: Path,
                           ditherer: ImageDitherer,
                           pixelize_method: Optional[str] = None,
                           max_size: int = 64,
-                          final_resize_target: Optional[int] = None) -> bool:
+                          final_resize_multiplier: Optional[int] = None) -> bool:
     """
     Process a single frame. Used by multiprocessing pool.
     Must be a top-level function for pickling.
@@ -421,7 +415,7 @@ def _process_single_frame(frame_path: Path,
         ditherer: ImageDitherer instance for dithering
         pixelize_method: "neural" or "regular" or None for no pixelization
         max_size: Maximum size for pixelization
-        final_resize_target: Optional target size for final upscale
+        final_resize_multiplier: Optional integer multiplier for final upscale
     
     Returns:
         True if successful, False if failed
@@ -442,8 +436,8 @@ def _process_single_frame(frame_path: Path,
         dithered = ditherer.apply_dithering(img)
         
         # Apply final resize if specified
-        if final_resize_target:
-            dithered = _apply_final_resize_to_frame(dithered, final_resize_target)
+        if final_resize_multiplier:
+            dithered = _apply_final_resize_to_frame(dithered, final_resize_multiplier)
         
         # Save back to same path
         dithered.save(frame_path)

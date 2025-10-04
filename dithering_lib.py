@@ -28,7 +28,8 @@ class DitherMode(Enum):
     WAVELET = "wavelet"
     ADAPTIVE_VARIANCE = "adaptive_variance"
     PERCEPTUAL = "perceptual"
-    HYBRID = "hybrid"           # <-- NEW HYBRID MODE
+    HYBRID = "hybrid"
+    HALFTONE = "halftone"
 
 
 # -------------------- Base Classes for Dithering Strategies --------------------
@@ -474,6 +475,274 @@ class HybridDitherStrategy(BaseDitherStrategy):
         return work_2d.reshape((-1,3))
 
 
+# -------------------- Halftone Dithering --------------------
+
+class HalftoneDitherStrategy(BaseDitherStrategy):
+    """
+    Newspaper-style halftone dithering using variable-sized dots on a regular grid.
+    Creates the classic printed newspaper look with dots that vary in size based on brightness.
+    
+    ==================== ADJUSTABLE PARAMETERS ====================
+    
+    GRID PARAMETERS:
+    - cell_size: Distance between dot centers (default: 8)
+                 Smaller = finer detail, more dots
+                 Larger = coarser, more visible dots
+                 Try: 4-16 for different newspaper styles (8-12 is typical)
+    
+    - angle: Screen angle in degrees (default: 45)
+             45° is classic newspaper angle
+             Try: 0, 15, 45, 75 for different patterns
+    
+    DOT PARAMETERS:
+    - dot_gain: How quickly dots grow (default: 1.0)
+                1.0 = linear growth
+                Higher = more contrast, punchier blacks
+                Lower = softer, more gradual transitions
+                Try: 0.8-2.0
+    
+    - min_dot_size: Minimum dot threshold (default: 0.0)
+                    0.0 = can be completely white in highlights
+                    Try: 0.0-0.3
+    
+    - max_dot_size: Maximum dot threshold (default: 1.0)
+                    1.0 = can be completely dark in shadows
+                    Try: 0.8-1.0
+    
+    SHAPE PARAMETERS:
+    - shape: Dot shape (default: "circle")
+             Options: "circle", "square", "diamond"
+             Circle = classic newspaper
+             Square = more modern/digital
+             Diamond = softer, less geometric
+    
+    - sharpness: Edge sharpness (default: 1.5)
+                 Higher = sharper dot edges
+                 Lower = softer, more blended
+                 Try: 1.0-3.0
+    
+    ===============================================================
+    """
+    
+    def __init__(self, 
+                 cell_size: int = 8,
+                 angle: float = 45.0,
+                 dot_gain: float = 1.0,
+                 min_dot_size: float = 0.0,
+                 max_dot_size: float = 1.0,
+                 shape: str = "circle",
+                 sharpness: float = 1.5):
+        """
+        Initialize halftone dithering with newspaper-style parameters.
+        
+        Args:
+            cell_size: Grid spacing between dot centers
+            angle: Screen angle in degrees (45° is classic newspaper)
+            dot_gain: Controls dot growth rate (higher = more contrast)
+            min_dot_size: Minimum dot radius as fraction of cell_size
+            max_dot_size: Maximum dot radius as fraction of cell_size
+            shape: Dot shape - "circle", "square", or "diamond"
+            sharpness: Edge sharpness for anti-aliasing
+        """
+        self.cell_size = cell_size
+        self.angle = angle
+        self.dot_gain = dot_gain
+        self.min_dot_size = min_dot_size
+        self.max_dot_size = max_dot_size
+        self.shape = shape
+        self.sharpness = sharpness
+    
+    def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
+               image_size: Tuple[int, int]) -> np.ndarray:
+        h, w = image_size
+        
+        # Flatten pixels for processing
+        flat_pixels = pixels.astype(np.float32)
+        pix_2d = flat_pixels.reshape((h, w, 3))
+        
+        # Calculate brightness of each pixel
+        gray = 0.299 * pix_2d[:,:,0] + 0.587 * pix_2d[:,:,1] + 0.114 * pix_2d[:,:,2]
+        gray_norm = gray / 255.0  # Normalize to [0, 1]
+        
+        # Find PAPER (lightest color) in palette - this is the background
+        palette_brightness = 0.299 * palette_arr[:,0] + 0.587 * palette_arr[:,1] + 0.114 * palette_arr[:,2]
+        paper_idx = np.argmax(palette_brightness)
+        
+        # Build KDTree for palette
+        tree = KDTree(palette_arr)
+        
+        # Generate halftone screen and get cell assignments
+        halftone_screen, cell_assignments = self._generate_halftone_screen_with_cells(h, w)
+        
+        # For each cell (dot), determine ONE ink color by sampling the cell center
+        unique_cells = np.unique(cell_assignments)
+        cell_colors = {}
+        
+        for cell_id in unique_cells:
+            # Find all pixels in this cell
+            cell_mask = (cell_assignments == cell_id)
+            cell_pixels = pix_2d[cell_mask]
+            
+            if len(cell_pixels) > 0:
+                # Use the average color of the cell to determine ink color
+                avg_color = np.mean(cell_pixels, axis=0)
+                # Find nearest palette color for this entire dot
+                _, idx = tree.query(avg_color.reshape(1, -1), k=1)
+                cell_colors[cell_id] = idx[0]
+        
+        # NEWSPAPER LOGIC:
+        # Start with PAPER everywhere
+        # Place INK dots where darkness > threshold
+        # Each dot is ONE solid color
+        
+        darkness = 1.0 - gray_norm  # How much ink is needed
+        place_ink = darkness > halftone_screen
+        
+        # Start with paper everywhere
+        result = np.full((h, w), paper_idx, dtype=np.int32)
+        
+        # Place ink dots - each cell gets its ONE color
+        for cell_id, color_idx in cell_colors.items():
+            cell_mask = (cell_assignments == cell_id)
+            # Only place ink where both: (1) in this cell, (2) ink is needed
+            place_ink_in_cell = cell_mask & place_ink
+            result[place_ink_in_cell] = color_idx
+        
+        return palette_arr[result.flatten(), :]
+    
+    def _generate_halftone_screen_with_cells(self, h: int, w: int) -> tuple:
+        """
+        Generate halftone screen and return cell assignments.
+        Each cell (dot) gets a unique ID so we can assign ONE color per dot.
+        
+        Returns: (screen, cell_assignments)
+        """
+        # Convert angle to radians
+        angle_rad = np.radians(self.angle)
+        cos_a = np.cos(angle_rad)
+        sin_a = np.sin(angle_rad)
+        
+        # Create coordinate grids
+        y_coords, x_coords = np.mgrid[0:h, 0:w]
+        
+        # Rotate coordinates
+        x_rot = x_coords * cos_a - y_coords * sin_a
+        y_rot = x_coords * sin_a + y_coords * cos_a
+        
+        # Find grid cells - each cell gets unique ID
+        cell_x = np.floor(x_rot / self.cell_size).astype(np.int32)
+        cell_y = np.floor(y_rot / self.cell_size).astype(np.int32)
+        
+        # Create unique cell IDs
+        # Offset to ensure positive IDs
+        cell_x_offset = cell_x - cell_x.min()
+        cell_y_offset = cell_y - cell_y.min()
+        max_x = cell_x_offset.max() + 1
+        cell_assignments = cell_y_offset * max_x + cell_x_offset
+        
+        # Calculate position within cell (fractional part)
+        x_in_cell = (x_rot % self.cell_size) / self.cell_size
+        y_in_cell = (y_rot % self.cell_size) / self.cell_size
+        
+        # Distance from cell center
+        dx = x_in_cell - 0.5
+        dy = y_in_cell - 0.5
+        
+        if self.shape == "circle":
+            dist = np.sqrt(dx**2 + dy**2)
+            max_dist = 0.5
+        elif self.shape == "square":
+            dist = np.maximum(np.abs(dx), np.abs(dy))
+            max_dist = 0.5
+        elif self.shape == "diamond":
+            dist = np.abs(dx) + np.abs(dy)
+            max_dist = 1.0
+        else:
+            dist = np.sqrt(dx**2 + dy**2)
+            max_dist = 0.5
+        
+        # Normalize distance to [0, 1]
+        dist_norm = np.clip(dist / max_dist, 0.0, 1.0)
+        
+        # Create threshold pattern
+        threshold = dist_norm ** (1.0 / self.dot_gain)
+        threshold = self.min_dot_size + threshold * (self.max_dot_size - self.min_dot_size)
+        
+        if self.sharpness != 1.0:
+            center = 0.5
+            threshold = center + (threshold - center) * self.sharpness
+        
+        threshold = np.clip(threshold, 0.0, 1.0).astype(np.float32)
+        
+        return threshold, cell_assignments
+    
+    def _generate_halftone_screen(self, h: int, w: int) -> np.ndarray:
+        """
+        Generate halftone threshold screen - a fixed grid pattern like a halftone screen.
+        
+        Returns threshold values in [0, 1] where:
+        - Center of dots = LOW threshold (0.0) - dark areas fall here
+        - Edge of dots = HIGH threshold (1.0) - light areas fall here
+        
+        When we compare pixel brightness to this screen:
+        - Dark pixels (low brightness) will be < threshold at center → use dark color
+        - Light pixels (high brightness) will be >= threshold everywhere → use light color
+        - Medium pixels will create the halftone dot pattern
+        """
+        # Convert angle to radians
+        angle_rad = np.radians(self.angle)
+        cos_a = np.cos(angle_rad)
+        sin_a = np.sin(angle_rad)
+        
+        # Create coordinate grids
+        y_coords, x_coords = np.mgrid[0:h, 0:w]
+        
+        # Rotate coordinates
+        x_rot = x_coords * cos_a - y_coords * sin_a
+        y_rot = x_coords * sin_a + y_coords * cos_a
+        
+        # Calculate position within cell (fractional part)
+        x_in_cell = (x_rot % self.cell_size) / self.cell_size  # [0, 1]
+        y_in_cell = (y_rot % self.cell_size) / self.cell_size  # [0, 1]
+        
+        # Distance from cell center
+        dx = x_in_cell - 0.5
+        dy = y_in_cell - 0.5
+        
+        if self.shape == "circle":
+            dist = np.sqrt(dx**2 + dy**2)
+            max_dist = 0.5
+        elif self.shape == "square":
+            dist = np.maximum(np.abs(dx), np.abs(dy))
+            max_dist = 0.5
+        elif self.shape == "diamond":
+            dist = np.abs(dx) + np.abs(dy)
+            max_dist = 1.0
+        else:
+            dist = np.sqrt(dx**2 + dy**2)
+            max_dist = 0.5
+        
+        # Normalize distance to [0, 1]
+        dist_norm = np.clip(dist / max_dist, 0.0, 1.0)
+        
+        # Create threshold pattern based on distance from center
+        # At center (dist=0): threshold = min_dot_size (low, for dark areas)
+        # At edge (dist=1): threshold = max_dot_size (high, for light areas)
+        threshold = dist_norm ** (1.0 / self.dot_gain)
+        
+        # Scale to the configurable range
+        threshold = self.min_dot_size + threshold * (self.max_dot_size - self.min_dot_size)
+        
+        # Apply sharpness to make dot edges crisper
+        if self.sharpness != 1.0:
+            center = 0.5
+            threshold = center + (threshold - center) * self.sharpness
+        
+        threshold = np.clip(threshold, 0.0, 1.0)
+        
+        return threshold.astype(np.float32)
+
+
 # -------------------- Dither Utils --------------------
 
 class DitherUtils:
@@ -669,6 +938,18 @@ class ImageDitherer:
         elif mode == DitherMode.HYBRID:
             # Example: fully diffuse luminance, 20% color
             return HybridDitherStrategy(lum_factor=1.0, col_factor=0.2)
+        elif mode == DitherMode.HALFTONE:
+            # Newspaper-style halftone with tunable parameters
+            # TWEAK THESE VALUES TO GET YOUR PERFECT NEWSPAPER LOOK:
+            return HalftoneDitherStrategy(
+                cell_size=8,        # Try 4-16 (smaller = finer dots, 8-12 is good for newspaper)
+                angle=45.0,         # Try 0, 15, 45, 75 (45° is classic newspaper)
+                dot_gain=1.0,       # Try 0.8-2.0 (1.0 = linear, higher = more contrast)
+                min_dot_size=0.0,   # Try 0.0-0.3 (0 = can be fully white)
+                max_dot_size=1.0,   # Try 0.8-1.0 (1.0 = can be fully dark)
+                shape="circle",     # Try "circle", "square", "diamond"
+                sharpness=1.5       # Try 1.0-3.0 (higher = sharper edges)
+            )
         else:
             raise ValueError(f"Unrecognized DitherMode: {mode}")
 

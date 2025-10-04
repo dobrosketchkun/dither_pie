@@ -11,3 +11,5 @@ __pycache__/
 *.jpeg
 *.bmp
 *_backup.py
+dithering_lib.py
+*.mdc

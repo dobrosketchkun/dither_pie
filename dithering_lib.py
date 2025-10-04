@@ -12,7 +12,7 @@ from PIL import Image
 from scipy.spatial import KDTree
 from sklearn.cluster import KMeans
 import pywt  # For wavelet-based dithering if needed
-
+import heapq
 
 # -------------------- Enumerations --------------------
 
@@ -114,32 +114,119 @@ def generate_blue_noise(size: int=64, seed: int=42)->np.ndarray:
     return BN
 
 
+
+
+
 class BlueNoiseDitherStrategy(MatrixDitherStrategy):
-    def __init__(self, size:int=64, seed:int=42):
-        bn = generate_blue_noise(size, seed)
+    """
+    Blue noise dithering for high-quality spatial distribution.
+    Generates a noise pattern that minimizes low-frequency artifacts.
+    """
+    
+    # In-memory cache for generated blue noise matrices (does not persist between app runs)
+    _cache = {}
+    
+    @staticmethod
+    def get_parameter_info():
+        """
+        Returns metadata about configurable parameters for this dithering mode.
+        """
+        return {
+            'size': {
+                'type': 'int',
+                'default': 64,
+                'min': 32,
+                'max': 128,
+                'label': 'Matrix Size',
+                'description': 'Size of the blue noise matrix (larger = more detail but slower)'
+            },
+            'seed': {
+                'type': 'int',
+                'default': 42,
+                'min': 0,
+                'max': 9999,
+                'label': 'Random Seed',
+                'description': 'Seed for noise generation (different seeds = different patterns)'
+            }
+        }
+    
+    def __init__(self, size: int = 64, seed: int = 42):
+        self.size = size
+        self.seed = seed
+        
+        # Check cache first
+        cache_key = (size, seed)
+        if cache_key in BlueNoiseDitherStrategy._cache:
+            bn = BlueNoiseDitherStrategy._cache[cache_key]
+        else:
+            # Generate and cache
+            bn = generate_blue_noise(size, seed)
+            BlueNoiseDitherStrategy._cache[cache_key] = bn
+        
         super().__init__(bn)
+    
+    def get_current_parameters(self):
+        """Returns current parameter values."""
+        return {
+            'size': self.size,
+            'seed': self.seed
+        }
 
 
 class PolkaDotDitherStrategy(BaseDitherStrategy):
     """
-    A simplistic polka-dot approach using an 8x8 threshold matrix shaped like circles.
+    Polka-dot dithering using circular threshold patterns.
+    Creates a repeating pattern of circular dots for a retro printing effect.
     """
-    def __init__(self, tile_size:int=8):
+    
+    @staticmethod
+    def get_parameter_info():
+        """
+        Returns metadata about configurable parameters for this dithering mode.
+        """
+        return {
+            'tile_size': {
+                'type': 'int',
+                'default': 8,
+                'min': 4,
+                'max': 32,
+                'label': 'Tile Size',
+                'description': 'Size of the repeating dot pattern'
+            },
+            'gamma': {
+                'type': 'float',
+                'default': 1.5,
+                'min': 0.5,
+                'max': 3.0,
+                'step': 0.1,
+                'label': 'Gamma',
+                'description': 'Controls dot shape curve (higher = sharper edges)'
+            }
+        }
+    
+    def __init__(self, tile_size: int = 8, gamma: float = 1.5):
         self.tile_size = tile_size
-        self.threshold_matrix = self._generate_polka_dot_matrix(tile_size)
+        self.gamma = gamma
+        self.threshold_matrix = self._generate_polka_dot_matrix(tile_size, gamma)
+    
+    def get_current_parameters(self):
+        """Returns current parameter values."""
+        return {
+            'tile_size': self.tile_size,
+            'gamma': self.gamma
+        }
 
-    def _generate_polka_dot_matrix(self, tile_size:int)->np.ndarray:
+    def _generate_polka_dot_matrix(self, tile_size: int, gamma: float) -> np.ndarray:
         x = np.arange(tile_size)
         y = np.arange(tile_size)
-        xv,yv = np.meshgrid(x,y)
-        cx = (tile_size-1)/2
-        cy = (tile_size-1)/2
-        dist = np.sqrt((xv-cx)**2 + (yv-cy)**2)
+        xv, yv = np.meshgrid(x, y)
+        cx = (tile_size - 1) / 2
+        cy = (tile_size - 1) / 2
+        dist = np.sqrt((xv - cx)**2 + (yv - cy)**2)
         max_dist = np.sqrt(cx**2 + cy**2)
-        norm_dist = dist / (max_dist+1e-9)
-        gamma = 1.5
+        norm_dist = dist / (max_dist + 1e-9)
         thresh = 1.0 - (norm_dist**gamma)
-        return np.clip(thresh,0,1).astype(np.float32)
+        return np.clip(thresh, 0, 1).astype(np.float32)
 
     def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
                image_size: Tuple[int,int]) -> np.ndarray:
@@ -961,6 +1048,10 @@ class ImageDitherer:
         """
         if mode == DitherMode.HALFTONE:
             return HalftoneDitherStrategy.get_parameter_info()
+        elif mode == DitherMode.POLKA_DOT:
+            return PolkaDotDitherStrategy.get_parameter_info()
+        elif mode == DitherMode.BLUE_NOISE:
+            return BlueNoiseDitherStrategy.get_parameter_info()
         # Add other modes here as they become configurable
         return None
     
@@ -981,9 +1072,17 @@ class ImageDitherer:
         elif mode == DitherMode.BAYER16x16:
             return MatrixDitherStrategy(DitherUtils.BAYER16x16)
         elif mode == DitherMode.BLUE_NOISE:
-            return BlueNoiseDitherStrategy(size=64, seed=42)
+            # Blue noise with configurable parameters
+            params = BlueNoiseDitherStrategy.get_parameter_info()
+            settings = {key: info['default'] for key, info in params.items()}
+            settings.update(self.dither_params)
+            return BlueNoiseDitherStrategy(**settings)
         elif mode == DitherMode.POLKA_DOT:
-            return PolkaDotDitherStrategy(tile_size=8)
+            # Polka dot with configurable parameters
+            params = PolkaDotDitherStrategy.get_parameter_info()
+            settings = {key: info['default'] for key, info in params.items()}
+            settings.update(self.dither_params)
+            return PolkaDotDitherStrategy(**settings)
         elif mode == DitherMode.RIEMERSMA:
             return RiemersmaDitherStrategy()
         elif mode == DitherMode.WAVELET:

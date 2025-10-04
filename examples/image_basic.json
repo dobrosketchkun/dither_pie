@@ -1,0 +1,18 @@
+{
+    "_comment": "Basic image dithering - simple median cut palette",
+    "input": "../test_300.png",
+    "output": "../output_basic.png",
+    "pixelization": {
+        "enabled": false
+    },
+    "dithering": {
+        "enabled": true,
+        "mode": "bayer"
+    },
+    "palette": {
+        "source": "median_cut",
+        "num_colors": 16,
+        "use_gamma": false
+    }
+}
+

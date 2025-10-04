@@ -157,13 +157,14 @@ class ConfigValidationError(Exception):
     pass
 
 
-def validate_config(config: Dict[str, Any], config_path: Path) -> Dict[str, Any]:
+def validate_config(config: Dict[str, Any], config_path: Path, skip_input_check: bool = False) -> Dict[str, Any]:
     """
     Validate configuration and return normalized config.
     
     Args:
         config: Raw config dictionary
         config_path: Path to config file (for resolving relative paths)
+        skip_input_check: If True, skip checking if input file exists (for override mode)
         
     Returns:
         Validated and normalized config
@@ -173,7 +174,7 @@ def validate_config(config: Dict[str, Any], config_path: Path) -> Dict[str, Any]
     """
     errors = []
     
-    # Required fields
+    # Required fields (but allow dummy values if we're going to override)
     if "input" not in config:
         errors.append("Missing required field: 'input'")
     
@@ -279,8 +280,8 @@ def validate_config(config: Dict[str, Any], config_path: Path) -> Dict[str, Any]
         output_path = (config_dir / output_path).resolve()
     config["output"] = str(output_path)
     
-    # Check if input exists
-    if not Path(config["input"]).exists():
+    # Check if input exists (skip if we're going to override it)
+    if not skip_input_check and not Path(config["input"]).exists():
         raise ConfigValidationError(f"Input file/directory not found: {config['input']}")
     
     # Set defaults for optional fields
@@ -309,12 +310,13 @@ def validate_config(config: Dict[str, Any], config_path: Path) -> Dict[str, Any]
     return config
 
 
-def load_config(config_path: Path) -> Dict[str, Any]:
+def load_config(config_path: Path, skip_input_check: bool = False) -> Dict[str, Any]:
     """
     Load and validate configuration from JSON file.
     
     Args:
         config_path: Path to JSON config file
+        skip_input_check: If True, skip checking if input file exists (for override mode)
         
     Returns:
         Validated config dictionary
@@ -331,7 +333,7 @@ def load_config(config_path: Path) -> Dict[str, Any]:
         raise ConfigValidationError(f"Failed to load config file: {e}")
     
     # Validate and normalize
-    return validate_config(config, config_path)
+    return validate_config(config, config_path, skip_input_check=skip_input_check)
 
 
 def detect_mode(input_path: Path) -> str:
@@ -545,6 +547,10 @@ def process_single_image(config: Dict[str, Any]) -> bool:
         logger.info(f"[bold green]✓ Image saved successfully![/] ({size_kb:.1f} KB)")
         
         return True
+    
+    except KeyboardInterrupt:
+        logger.warning("\n[yellow]Image processing interrupted by user[/]")
+        raise  # Re-raise to stop execution
         
     except Exception as e:
         logger.error(f"Failed to process image: {e}", exc_info=True)
@@ -663,10 +669,74 @@ def process_single_video(config: Dict[str, Any], neural_pixelizer: Optional[Neur
         else:
             logger.error("Video processing failed")
             return False
+    
+    except KeyboardInterrupt:
+        logger.warning("\n[yellow]Video processing interrupted by user[/]")
+        raise  # Re-raise to stop execution
             
     except Exception as e:
         logger.error(f"Failed to process video: {e}", exc_info=True)
         return False
+
+
+# ==================== Filename Generation ====================
+
+def generate_output_filename(input_path: Path, config: Dict[str, Any]) -> Path:
+    """
+    Generate smart output filename based on input and config settings.
+    
+    Args:
+        input_path: Input file path
+        config: Configuration dictionary
+        
+    Returns:
+        Output path in the same directory as input with descriptive name
+    """
+    # Get base filename (cap at 30 chars to prevent long names)
+    base_stem = input_path.stem
+    if len(base_stem) > 30:
+        base_stem = base_stem[:30]
+    
+    parts = [base_stem]
+    
+    # Add pixelization info if enabled
+    if config["pixelization"]["enabled"]:
+        method = config["pixelization"]["method"]
+        if method != "none":
+            parts.append(f"pix{config['pixelization']['max_size']}")
+    
+    # Add dithering info if enabled
+    if config["dithering"]["enabled"]:
+        parts.append(config["dithering"]["mode"])
+        
+        # Add palette info
+        palette_source = config["palette"]["source"]
+        num_colors = config["palette"]["num_colors"]
+        
+        # Simplify palette source for filename
+        if palette_source == "median_cut":
+            parts.append(f"{num_colors}c")
+        elif palette_source == "kmeans":
+            parts.append(f"km{num_colors}c")
+        elif palette_source == "uniform":
+            parts.append(f"uni{num_colors}c")
+        elif palette_source.startswith("file:"):
+            parts.append(f"{num_colors}c")
+        else:
+            # Custom palette name (cap at 10 chars)
+            palette_name = palette_source.replace("custom:", "")
+            palette_name = palette_name[:10] if len(palette_name) > 10 else palette_name
+            parts.append(palette_name)
+        
+        # Add gamma if enabled
+        if config["palette"]["use_gamma"]:
+            parts.append("gamma")
+    
+    # Create output filename
+    output_stem = "_".join(parts)
+    output_path = input_path.parent / f"{output_stem}{input_path.suffix}"
+    
+    return output_path
 
 
 # ==================== Batch Folder Processing ====================
@@ -826,15 +896,18 @@ def process_folder(config: Dict[str, Any]) -> bool:
         return False
 
 
+
 def show_banner():
     """Display application banner."""
     banner = """
-[bold cyan]╔═══════════════════════════════════════╗[/]
-[bold cyan]║[/]      [bold white]Dither Pie CLI[/] [dim]- v1.0[/]        [bold cyan]║[/]
-[bold cyan]║[/]  Image & Video Dithering Tool      [bold cyan]║[/]
-[bold cyan]╚═══════════════════════════════════════╝[/]
+[bold cyan]░░░░       ░░░        ░░        ░░  ░░░░  ░░        ░░       ░░░░░░░░░       ░░░        ░░        ░░░░░░░░░      ░░░  ░░░░░░░░        ░░░░[/]
+[bold cyan]▒▒▒▒  ▒▒▒▒  ▒▒▒▒▒  ▒▒▒▒▒▒▒▒  ▒▒▒▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒▒▒▒▒  ▒▒▒▒  ▒▒▒▒▒▒▒▒  ▒▒▒▒  ▒▒▒▒▒  ▒▒▒▒▒  ▒▒▒▒▒▒▒▒▒▒▒▒▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒▒▒▒▒▒▒▒  ▒▒▒▒▒▒▒[/]
+[bold cyan]▓▓▓▓  ▓▓▓▓  ▓▓▓▓▓  ▓▓▓▓▓▓▓▓  ▓▓▓▓▓        ▓▓      ▓▓▓▓       ▓▓▓▓▓▓▓▓▓       ▓▓▓▓▓▓  ▓▓▓▓▓      ▓▓▓▓▓▓▓▓▓▓  ▓▓▓▓▓▓▓▓  ▓▓▓▓▓▓▓▓▓▓▓  ▓▓▓▓▓▓▓[/]
+[bold cyan]████  ████  █████  ████████  █████  ████  ██  ████████  ███  █████████  ███████████  █████  ██████████████  ████  ██  ███████████  ███████[/]
+[bold cyan]████       ███        █████  █████  ████  ██        ██  ████  ████████  ████████        ██        █████████      ███        ██        ████[/]
 """
     console.print(banner)
+
 
 
 def show_help():
@@ -843,9 +916,10 @@ def show_help():
 [bold cyan]Dither Pie CLI - Usage[/]
 
 [bold]Basic Usage:[/]
-  python dither_pie.py <config.json>        Process with JSON config
-  python dither_pie.py --help               Show this help
-  python dither_pie.py --example-config     Generate example config
+  python dither_pie.py <config.json>                    Process with JSON config
+  python dither_pie.py <config.json> <file/folder>      Process file/folder with config settings
+  python dither_pie.py --help                           Show this help
+  python dither_pie.py --example-config                 Generate example config
 
 [bold]Options:[/]
   --verbose, -v     Enable verbose output
@@ -853,18 +927,26 @@ def show_help():
   --log-file FILE   Write log to file
 
 [bold]Config File Format:[/]
-  JSON file specifying input, output, and processing parameters.
+  JSON file specifying processing parameters (input/output optional when using second argument).
   Use --example-config to generate a template.
 
 [bold]Examples:[/]
-  # Process single image
+  # Process single image with config
   python dither_pie.py configs/image_basic.json
+  
+  # Process specific file (generates smart output name)
+  python dither_pie.py configs/settings.json photo.jpg
+  # Output: photo_bayer_16c.jpg (in same directory)
+  
+  # Process folder (creates output_processed folder)
+  python dither_pie.py configs/settings.json images/
+  # Output: images_processed/ folder
   
   # Process video with verbose output
   python dither_pie.py -v configs/video.json
   
-  # Batch process folder
-  python dither_pie.py configs/batch_folder.json
+  # Batch process with override
+  python dither_pie.py configs/batch.json my_photos/
 
 [bold]Available Dither Modes:[/]
 """
@@ -926,6 +1008,7 @@ def main():
     )
     
     parser.add_argument('config', nargs='?', help='Path to JSON configuration file')
+    parser.add_argument('input_override', nargs='?', help='Optional: file/folder to process (overrides config input/output)')
     parser.add_argument('--help', '-h', action='store_true', help='Show help')
     parser.add_argument('--example-config', action='store_true', help='Generate example config')
     parser.add_argument('--verbose', '-v', action='store_true', help='Verbose output')
@@ -967,9 +1050,9 @@ def main():
     
     logger.info(f"Loading configuration from: [cyan]{config_path}[/]")
     
-    # Load and validate config
+    # Load and validate config (skip input check if we have an override)
     try:
-        config = load_config(config_path)
+        config = load_config(config_path, skip_input_check=bool(args.input_override))
     except ConfigValidationError as e:
         logger.error(f"[bold red]{e}[/]")
         sys.exit(1)
@@ -978,6 +1061,33 @@ def main():
         sys.exit(1)
     
     logger.info("[green]✓[/] Configuration validated")
+    
+    # Handle input override (second argument)
+    if args.input_override:
+        input_override_path = Path(args.input_override)
+        
+        # Check if it exists
+        if not input_override_path.exists():
+            logger.error(f"Input override file/folder not found: {input_override_path}")
+            sys.exit(1)
+        
+        # Override input
+        config["input"] = str(input_override_path.resolve())
+        
+        # Generate smart output filename
+        if input_override_path.is_dir():
+            # For folders, create output folder in same parent directory
+            output_folder_name = f"{input_override_path.name}_processed"
+            config["output"] = str((input_override_path.parent / output_folder_name).resolve())
+            config["mode"] = "folder"
+        else:
+            # For files, generate smart filename in same directory
+            output_file = generate_output_filename(input_override_path, config)
+            config["output"] = str(output_file.resolve())
+            config["mode"] = None  # Will be auto-detected
+        
+        logger.info(f"[cyan]Using input override:[/] {input_override_path.name}")
+        logger.info(f"[cyan]Generated output:[/] {Path(config['output']).name}")
     
     # Auto-detect mode if not specified
     if not config["mode"]:
@@ -1012,14 +1122,20 @@ def main():
     mode = config["mode"]
     success = False
     
-    if mode == "image":
-        success = process_single_image(config)
-        
-    elif mode == "video":
-        success = process_single_video(config)
-        
-    elif mode == "folder":
-        success = process_folder(config)
+    try:
+        if mode == "image":
+            success = process_single_image(config)
+            
+        elif mode == "video":
+            success = process_single_video(config)
+            
+        elif mode == "folder":
+            success = process_folder(config)
+    
+    except KeyboardInterrupt:
+        logger.info("")
+        logger.warning("[bold yellow]⚠ Processing interrupted by user (Ctrl+C)[/]")
+        sys.exit(130)  # Standard exit code for Ctrl+C
     
     # Exit with appropriate code
     if success:

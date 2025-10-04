@@ -1,0 +1,24 @@
+{
+    "_comment": "Pixelized retro effect with dithering",
+    "input": "../test_300.png",
+    "output": "../output_pixelized.png",
+    "pixelization": {
+        "enabled": true,
+        "method": "regular",
+        "max_size": 64
+    },
+    "dithering": {
+        "enabled": true,
+        "mode": "error_diffusion"
+    },
+    "palette": {
+        "source": "kmeans",
+        "num_colors": 16,
+        "use_gamma": true
+    },
+    "final_resize": {
+        "enabled": true,
+        "multiplier": 8
+    }
+}
+

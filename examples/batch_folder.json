@@ -1,0 +1,21 @@
+{
+    "_comment": "Batch process all images in a folder",
+    "input": "../misc",
+    "output": "../misc_output",
+    "mode": "folder",
+    "pixelization": {
+        "enabled": true,
+        "method": "regular",
+        "max_size": 64
+    },
+    "dithering": {
+        "enabled": true,
+        "mode": "error_diffusion"
+    },
+    "palette": {
+        "source": "median_cut",
+        "num_colors": 16,
+        "use_gamma": false
+    }
+}
+

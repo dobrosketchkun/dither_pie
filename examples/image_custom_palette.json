@@ -1,0 +1,24 @@
+{
+    "_comment": "Using a custom palette from palette.json (Game Boy colors)",
+    "input": "../test_300.png",
+    "output": "../output_gameboy.png",
+    "pixelization": {
+        "enabled": true,
+        "method": "regular",
+        "max_size": 64
+    },
+    "dithering": {
+        "enabled": true,
+        "mode": "bayer"
+    },
+    "palette": {
+        "source": "gameboy_dmg",
+        "num_colors": 4,
+        "use_gamma": false
+    },
+    "final_resize": {
+        "enabled": true,
+        "multiplier": 4
+    }
+}
+

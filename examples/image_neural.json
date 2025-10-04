@@ -1,0 +1,20 @@
+{
+    "_comment": "Neural pixelization with high-quality dithering",
+    "input": "../test_300.png",
+    "output": "../output_neural.png",
+    "pixelization": {
+        "enabled": true,
+        "method": "neural",
+        "max_size": 128
+    },
+    "dithering": {
+        "enabled": true,
+        "mode": "blue_noise"
+    },
+    "palette": {
+        "source": "median_cut",
+        "num_colors": 32,
+        "use_gamma": true
+    }
+}
+

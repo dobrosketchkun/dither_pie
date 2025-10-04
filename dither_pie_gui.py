@@ -554,6 +554,7 @@ class DitheringApp(ctk.CTk):
             self.is_video = False
             self.video_path = None
             self.display_state = "current"
+            self._last_loaded_file = filepath  # Track for filename generation
             
             # Invalidate pixelization cache (new source image)
             self._invalidate_pixelization_cache()
@@ -1601,43 +1602,47 @@ class DitheringApp(ctk.CTk):
         return resized
     
     def _generate_filename(self, state: str) -> str:
-        """Generate a default filename for saving."""
-        # Get base name from current file
-        if self.video_path and self.is_video:
-            base = Path(self.video_path).stem
-        elif self.current_image:
-            base = "image"
-        else:
-            base = "untitled"
+        """Generate a default filename for saving with original name + processing info."""
+        # Get base name from current file (limit length for window size)
+        base = "image"
+        if hasattr(self, '_last_loaded_file') and self._last_loaded_file:
+            # Use the actual loaded filename
+            original_stem = Path(self._last_loaded_file).stem
+            # Cap at 30 characters to prevent window overflow
+            base = original_stem[:30] if len(original_stem) > 30 else original_stem
         
         parts = [base]
         
-        # Add state
+        # Add processing info
         if state == "pixelized":
             parts.append("pixelized")
         elif state == "dithered":
-            parts.append("dithered")
+            # Add dithering mode
             parts.append(self.dither_mode.get())
-        
-        # Add color count
-        try:
-            colors = int(self.colors_entry.get())
-            parts.append(f"{colors}colors")
-        except:
-            pass
-        
-        # Add gamma if enabled
-        if self.last_gamma:
-            parts.append("gamma")
+            
+            # Add palette info if available
+            if self.last_palette:
+                # Try to get palette name/type
+                try:
+                    colors = int(self.colors_entry.get())
+                    parts.append(f"{colors}c")
+                except:
+                    pass
+            
+            # Add gamma if enabled
+            if self.last_gamma:
+                parts.append("gamma")
         
         return "_".join(parts) + ".png"
     
     def _generate_video_filename(self) -> str:
-        """Generate a default filename for saving video."""
+        """Generate a default filename for saving video with original name + processing info."""
+        # Get base name from video file (limit length for window size)
+        base = "video"
         if self.video_path:
-            base = Path(self.video_path).stem
-        else:
-            base = "video"
+            original_stem = Path(self.video_path).stem
+            # Cap at 30 characters to prevent window overflow
+            base = original_stem[:30] if len(original_stem) > 30 else original_stem
         
         parts = [base]
         
@@ -1646,19 +1651,19 @@ class DitheringApp(ctk.CTk):
             parts.append("pixelized")
         
         if self.dithered_image:
-            parts.append("dithered")
+            # Add dithering mode
             parts.append(self.dither_mode.get())
-        
-        # Add color count
-        try:
-            colors = int(self.colors_entry.get())
-            parts.append(f"{colors}colors")
-        except:
-            pass
-        
-        # Add gamma if enabled
-        if self.last_gamma:
-            parts.append("gamma")
+            
+            # Add color count
+            try:
+                colors = int(self.colors_entry.get())
+                parts.append(f"{colors}c")
+            except:
+                pass
+            
+            # Add gamma if enabled
+            if self.last_gamma:
+                parts.append("gamma")
         
         return "_".join(parts) + ".mp4"
     

@@ -1,0 +1,20 @@
+{
+    "_comment": "Basic video processing with dithering",
+    "input": "../1.mp4",
+    "output": "../1_dithered.mp4",
+    "pixelization": {
+        "enabled": true,
+        "method": "regular",
+        "max_size": 128
+    },
+    "dithering": {
+        "enabled": true,
+        "mode": "bayer"
+    },
+    "palette": {
+        "source": "median_cut",
+        "num_colors": 16,
+        "use_gamma": false
+    }
+}
+

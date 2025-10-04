@@ -32,7 +32,7 @@ class ConfigManager:
         "defaults": {
             "max_size": 640,
             "num_colors": 16,
-            "dither_mode": "bayer4x4",
+            "dither_mode": "bayer",
             "use_gamma": False,
             "final_resize_enabled": False,
             "final_size": 1920

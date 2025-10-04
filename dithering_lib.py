@@ -18,10 +18,7 @@ import heapq
 
 class DitherMode(Enum):
     NONE = "none"
-    BAYER2x2 = "bayer2x2"
-    BAYER4x4 = "bayer4x4"
-    BAYER8x8 = "bayer8x8"
-    BAYER16x16 = "bayer16x16"
+    BAYER = "bayer"
     FLOYD_STEINBERG = "floyd_steinberg"
     RIEMERSMA = "riemersma"
     BLUE_NOISE = "blue_noise"
@@ -117,6 +114,57 @@ def generate_blue_noise(size: int=64, seed: int=42)->np.ndarray:
 
 
 
+
+
+class BayerDitherStrategy(MatrixDitherStrategy):
+    """
+    Bayer ordered dithering with configurable matrix size.
+    Uses threshold matrices to create characteristic crosshatch patterns.
+    """
+    
+    @staticmethod
+    def get_parameter_info():
+        """
+        Returns metadata about configurable parameters for this dithering mode.
+        """
+        return {
+            'size': {
+                'type': 'choice',
+                'default': '4x4',
+                'choices': ['2x2', '4x4', '8x8', '16x16'],
+                'label': 'Matrix Size',
+                'description': 'Size of the Bayer threshold matrix (larger = finer patterns)'
+            }
+        }
+    
+    def __init__(self, size: str = '4x4'):
+        """
+        Initialize Bayer dithering with specified matrix size.
+        
+        Args:
+            size: Matrix size - '2x2', '4x4', '8x8', or '16x16'
+        """
+        self.size = size
+        
+        # Select the appropriate Bayer matrix
+        if size == '2x2':
+            matrix = DitherUtils.BAYER2x2
+        elif size == '4x4':
+            matrix = DitherUtils.BAYER4x4
+        elif size == '8x8':
+            matrix = DitherUtils.BAYER8x8
+        elif size == '16x16':
+            matrix = DitherUtils.BAYER16x16
+        else:
+            matrix = DitherUtils.BAYER4x4  # Default fallback
+        
+        super().__init__(matrix)
+    
+    def get_current_parameters(self):
+        """Returns current parameter values."""
+        return {
+            'size': self.size
+        }
 
 
 class BlueNoiseDitherStrategy(MatrixDitherStrategy):
@@ -1268,17 +1316,30 @@ class DitherUtils:
     ], dtype=np.float32)
 
     @staticmethod
-    def get_threshold_matrix(mode: DitherMode) -> np.ndarray:
+    def get_threshold_matrix(mode: DitherMode, size: str = '4x4') -> np.ndarray:
+        """
+        Get a threshold matrix for a given dithering mode.
+        
+        Args:
+            mode: The dithering mode
+            size: For BAYER mode, the matrix size ('2x2', '4x4', '8x8', '16x16')
+        
+        Returns:
+            The threshold matrix as a numpy array
+        """
         if mode == DitherMode.NONE:
             return np.ones((1,1), dtype=np.float32)
-        elif mode == DitherMode.BAYER2x2:
-            return DitherUtils.BAYER2x2
-        elif mode == DitherMode.BAYER4x4:
-            return DitherUtils.BAYER4x4
-        elif mode == DitherMode.BAYER8x8:
-            return DitherUtils.BAYER8x8
-        elif mode == DitherMode.BAYER16x16:
-            return DitherUtils.BAYER16x16
+        elif mode == DitherMode.BAYER:
+            if size == '2x2':
+                return DitherUtils.BAYER2x2
+            elif size == '4x4':
+                return DitherUtils.BAYER4x4
+            elif size == '8x8':
+                return DitherUtils.BAYER8x8
+            elif size == '16x16':
+                return DitherUtils.BAYER16x16
+            else:
+                return DitherUtils.BAYER4x4  # Default fallback
         else:
             raise ValueError(f"Unsupported matrix mode: {mode}")
 
@@ -1379,7 +1440,7 @@ class ImageDitherer:
     """
     def __init__(self,
                  num_colors: int=16,
-                 dither_mode: Optional[DitherMode]=DitherMode.BAYER4x4,
+                 dither_mode: Optional[DitherMode]=DitherMode.BAYER,
                  palette: Optional[List[Tuple[int,int,int]]]=None,
                  use_gamma: bool=False,
                  dither_params: Optional[dict]=None):
@@ -1395,7 +1456,9 @@ class ImageDitherer:
         Get parameter metadata for a specific dithering mode.
         Returns None if the mode has no configurable parameters.
         """
-        if mode == DitherMode.HALFTONE:
+        if mode == DitherMode.BAYER:
+            return BayerDitherStrategy.get_parameter_info()
+        elif mode == DitherMode.HALFTONE:
             return HalftoneDitherStrategy.get_parameter_info()
         elif mode == DitherMode.POLKA_DOT:
             return PolkaDotDitherStrategy.get_parameter_info()
@@ -1422,14 +1485,12 @@ class ImageDitherer:
     def _get_dither_strategy(self, mode: DitherMode) -> BaseDitherStrategy:
         if mode == DitherMode.NONE:
             return NoDitherStrategy()
-        elif mode == DitherMode.BAYER2x2:
-            return MatrixDitherStrategy(DitherUtils.BAYER2x2)
-        elif mode == DitherMode.BAYER4x4:
-            return MatrixDitherStrategy(DitherUtils.BAYER4x4)
-        elif mode == DitherMode.BAYER8x8:
-            return MatrixDitherStrategy(DitherUtils.BAYER8x8)
-        elif mode == DitherMode.BAYER16x16:
-            return MatrixDitherStrategy(DitherUtils.BAYER16x16)
+        elif mode == DitherMode.BAYER:
+            # Bayer with configurable matrix size
+            params = BayerDitherStrategy.get_parameter_info()
+            settings = {key: info['default'] for key, info in params.items()}
+            settings.update(self.dither_params)
+            return BayerDitherStrategy(**settings)
         elif mode == DitherMode.BLUE_NOISE:
             # Blue noise with configurable parameters
             params = BlueNoiseDitherStrategy.get_parameter_info()

@@ -21,6 +21,8 @@ class DitherMode(Enum):
     BAYER = "bayer"
     FLOYD_STEINBERG = "floyd_steinberg"
     JJN = "jjn"
+    STUCKI = "stucki"
+    BURKES = "burkes"
     SIERRA = "sierra"
     RIEMERSMA = "riemersma"
     BLUE_NOISE = "blue_noise"
@@ -1130,6 +1132,246 @@ class SierraDitherStrategy(BaseDitherStrategy):
             work_2d[y + 1, x] += err * (1.0 / 4.0)
 
 
+# -------------------- Stucki Error Diffusion --------------------
+
+class StuckiDitherStrategy(BaseDitherStrategy):
+    """
+    Stucki error diffusion algorithm.
+    Uses a 12-neighbor kernel similar to JJN but with different weights.
+    Known for producing smooth results with minimal artifacts.
+    
+    Error distribution pattern (divided by 42):
+           [ ] [ ] [X] 8  4
+       2   4   8   4   2
+       1   2   4   2   1
+    
+    Stucki tends to produce very smooth gradients and is excellent for
+    photographic images.
+    """
+    
+    @staticmethod
+    def get_parameter_info():
+        """
+        Returns metadata about configurable parameters for this dithering mode.
+        """
+        return {
+            'serpentine': {
+                'type': 'choice',
+                'default': 'true',
+                'choices': ['true', 'false'],
+                'label': 'Serpentine Scan',
+                'description': 'Alternates direction each row to reduce artifacts'
+            }
+        }
+    
+    def __init__(self, serpentine: str = 'true'):
+        """
+        Initialize Stucki error diffusion.
+        
+        Args:
+            serpentine: Whether to use serpentine scanning
+        """
+        self.serpentine = (serpentine == 'true')
+    
+    def get_current_parameters(self):
+        """Returns current parameter values."""
+        return {
+            'serpentine': 'true' if self.serpentine else 'false'
+        }
+    
+    def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
+               image_size: Tuple[int, int]) -> np.ndarray:
+        h, w = image_size
+        work_2d = pixels.reshape((h, w, 3)).astype(np.float32).copy()
+        tree = KDTree(palette_arr)
+        
+        for y in range(h):
+            # Serpentine scanning: alternate row direction
+            if self.serpentine and (y % 2 == 1):
+                x_range = range(w - 1, -1, -1)
+                x_direction = -1
+            else:
+                x_range = range(w)
+                x_direction = 1
+            
+            for x in x_range:
+                old_val = work_2d[y, x].copy()
+                
+                # Find nearest palette color
+                _, idx = tree.query(old_val, k=1)
+                chosen = palette_arr[idx]
+                work_2d[y, x] = chosen
+                
+                # Calculate error
+                err = old_val - chosen
+                
+                # Distribute error using Stucki weights (divided by 42)
+                # Pattern:      [X] 8→ 4→
+                #          2←  4← 8← 4← 2←
+                #          1←  2← 4← 2← 1←
+                
+                # Current row (y)
+                nx = x + x_direction
+                if 0 <= nx < w:
+                    work_2d[y, nx] += err * (8.0 / 42.0)
+                
+                nx = x + 2 * x_direction
+                if 0 <= nx < w:
+                    work_2d[y, nx] += err * (4.0 / 42.0)
+                
+                # Next row (y+1)
+                if y + 1 < h:
+                    nx = x - 2 * x_direction
+                    if 0 <= nx < w:
+                        work_2d[y + 1, nx] += err * (2.0 / 42.0)
+                    
+                    nx = x - x_direction
+                    if 0 <= nx < w:
+                        work_2d[y + 1, nx] += err * (4.0 / 42.0)
+                    
+                    work_2d[y + 1, x] += err * (8.0 / 42.0)
+                    
+                    nx = x + x_direction
+                    if 0 <= nx < w:
+                        work_2d[y + 1, nx] += err * (4.0 / 42.0)
+                    
+                    nx = x + 2 * x_direction
+                    if 0 <= nx < w:
+                        work_2d[y + 1, nx] += err * (2.0 / 42.0)
+                
+                # Two rows down (y+2)
+                if y + 2 < h:
+                    nx = x - 2 * x_direction
+                    if 0 <= nx < w:
+                        work_2d[y + 2, nx] += err * (1.0 / 42.0)
+                    
+                    nx = x - x_direction
+                    if 0 <= nx < w:
+                        work_2d[y + 2, nx] += err * (2.0 / 42.0)
+                    
+                    work_2d[y + 2, x] += err * (4.0 / 42.0)
+                    
+                    nx = x + x_direction
+                    if 0 <= nx < w:
+                        work_2d[y + 2, nx] += err * (2.0 / 42.0)
+                    
+                    nx = x + 2 * x_direction
+                    if 0 <= nx < w:
+                        work_2d[y + 2, nx] += err * (1.0 / 42.0)
+        
+        np.clip(work_2d, 0, 255, out=work_2d)
+        return work_2d.reshape((-1, 3))
+
+
+# -------------------- Burkes Error Diffusion --------------------
+
+class BurkesDitherStrategy(BaseDitherStrategy):
+    """
+    Burkes error diffusion algorithm.
+    Uses a 7-neighbor kernel with emphasis on horizontal and vertical neighbors.
+    Known for being fast while producing good quality.
+    
+    Error distribution pattern (divided by 32):
+           [ ] [ ] [X] 8  4
+       2   4   8   4   2
+    
+    Burkes uses only 2 rows (vs 3 for JJN/Stucki) making it faster while
+    still maintaining good quality.
+    """
+    
+    @staticmethod
+    def get_parameter_info():
+        """
+        Returns metadata about configurable parameters for this dithering mode.
+        """
+        return {
+            'serpentine': {
+                'type': 'choice',
+                'default': 'true',
+                'choices': ['true', 'false'],
+                'label': 'Serpentine Scan',
+                'description': 'Alternates direction each row to reduce artifacts'
+            }
+        }
+    
+    def __init__(self, serpentine: str = 'true'):
+        """
+        Initialize Burkes error diffusion.
+        
+        Args:
+            serpentine: Whether to use serpentine scanning
+        """
+        self.serpentine = (serpentine == 'true')
+    
+    def get_current_parameters(self):
+        """Returns current parameter values."""
+        return {
+            'serpentine': 'true' if self.serpentine else 'false'
+        }
+    
+    def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
+               image_size: Tuple[int, int]) -> np.ndarray:
+        h, w = image_size
+        work_2d = pixels.reshape((h, w, 3)).astype(np.float32).copy()
+        tree = KDTree(palette_arr)
+        
+        for y in range(h):
+            # Serpentine scanning: alternate row direction
+            if self.serpentine and (y % 2 == 1):
+                x_range = range(w - 1, -1, -1)
+                x_direction = -1
+            else:
+                x_range = range(w)
+                x_direction = 1
+            
+            for x in x_range:
+                old_val = work_2d[y, x].copy()
+                
+                # Find nearest palette color
+                _, idx = tree.query(old_val, k=1)
+                chosen = palette_arr[idx]
+                work_2d[y, x] = chosen
+                
+                # Calculate error
+                err = old_val - chosen
+                
+                # Distribute error using Burkes weights (divided by 32)
+                # Pattern:      [X] 8→ 4→
+                #          2←  4← 8← 4← 2←
+                
+                # Current row (y)
+                nx = x + x_direction
+                if 0 <= nx < w:
+                    work_2d[y, nx] += err * (8.0 / 32.0)
+                
+                nx = x + 2 * x_direction
+                if 0 <= nx < w:
+                    work_2d[y, nx] += err * (4.0 / 32.0)
+                
+                # Next row (y+1)
+                if y + 1 < h:
+                    nx = x - 2 * x_direction
+                    if 0 <= nx < w:
+                        work_2d[y + 1, nx] += err * (2.0 / 32.0)
+                    
+                    nx = x - x_direction
+                    if 0 <= nx < w:
+                        work_2d[y + 1, nx] += err * (4.0 / 32.0)
+                    
+                    work_2d[y + 1, x] += err * (8.0 / 32.0)
+                    
+                    nx = x + x_direction
+                    if 0 <= nx < w:
+                        work_2d[y + 1, nx] += err * (4.0 / 32.0)
+                    
+                    nx = x + 2 * x_direction
+                    if 0 <= nx < w:
+                        work_2d[y + 1, nx] += err * (2.0 / 32.0)
+        
+        np.clip(work_2d, 0, 255, out=work_2d)
+        return work_2d.reshape((-1, 3))
+
+
 # -------------------- Ostromoukhov's Variable Error Diffusion --------------------
 
 class OstromoukhovDitherStrategy(BaseDitherStrategy):
@@ -1796,6 +2038,10 @@ class ImageDitherer:
             return FloydSteinbergDitherStrategy.get_parameter_info()
         elif mode == DitherMode.JJN:
             return JJNDitherStrategy.get_parameter_info()
+        elif mode == DitherMode.STUCKI:
+            return StuckiDitherStrategy.get_parameter_info()
+        elif mode == DitherMode.BURKES:
+            return BurkesDitherStrategy.get_parameter_info()
         elif mode == DitherMode.SIERRA:
             return SierraDitherStrategy.get_parameter_info()
         elif mode == DitherMode.OSTROMOUKHOV:
@@ -1841,6 +2087,18 @@ class ImageDitherer:
             settings = {key: info['default'] for key, info in params.items()}
             settings.update(self.dither_params)
             return JJNDitherStrategy(**settings)
+        elif mode == DitherMode.STUCKI:
+            # Stucki with configurable parameters
+            params = StuckiDitherStrategy.get_parameter_info()
+            settings = {key: info['default'] for key, info in params.items()}
+            settings.update(self.dither_params)
+            return StuckiDitherStrategy(**settings)
+        elif mode == DitherMode.BURKES:
+            # Burkes with configurable parameters
+            params = BurkesDitherStrategy.get_parameter_info()
+            settings = {key: info['default'] for key, info in params.items()}
+            settings.update(self.dither_params)
+            return BurkesDitherStrategy(**settings)
         elif mode == DitherMode.SIERRA:
             # Sierra with configurable parameters
             params = SierraDitherStrategy.get_parameter_info()

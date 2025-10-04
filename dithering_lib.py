@@ -30,6 +30,7 @@ class DitherMode(Enum):
     PERCEPTUAL = "perceptual"
     HYBRID = "hybrid"
     HALFTONE = "halftone"
+    OSTROMOUKHOV = "ostromoukhov"
 
 
 # -------------------- Base Classes for Dithering Strategies --------------------
@@ -659,6 +660,146 @@ class HybridDitherStrategy(BaseDitherStrategy):
         return work_2d.reshape((-1,3))
 
 
+# -------------------- Ostromoukhov's Variable Error Diffusion --------------------
+
+class OstromoukhovDitherStrategy(BaseDitherStrategy):
+    """
+    Ostromoukhov's variable error diffusion algorithm.
+    Uses adaptive coefficients based on pixel intensity for better quality
+    than fixed Floyd-Steinberg weights.
+    
+    Reference: Victor Ostromoukhov, "A Simple and Efficient Error-Diffusion Algorithm" (2001)
+    """
+    
+    # Ostromoukhov's coefficient table for intensities 0-255
+    # Each entry is (c0, c1, c2) for [right, bottom-left, bottom] pixels
+    # Normalized to sum to a power of 2 for efficiency
+    COEFFS_TABLE = [
+        # Generated from Ostromoukhov's paper
+        (13, 0, 5), (13, 0, 5), (21, 0, 10), (7, 0, 4), (8, 0, 5), (47, 3, 28), (23, 3, 13), (15, 3, 8),
+        (22, 6, 11), (43, 15, 20), (7, 3, 3), (501, 224, 211), (249, 116, 103), (165, 80, 67), (123, 62, 49), (489, 256, 191),
+        (81, 44, 31), (483, 272, 181), (60, 35, 22), (53, 32, 19), (237, 148, 83), (471, 304, 161), (3, 2, 1), (481, 314, 185),
+        (354, 226, 155), (1389, 866, 685), (227, 138, 125), (267, 158, 163), (327, 188, 220), (61, 34, 45), (627, 338, 505), (1227, 638, 1075),
+        (20, 10, 19), (1937, 1000, 1767), (977, 520, 855), (657, 360, 551), (71, 40, 57), (2005, 1160, 1539), (337, 200, 247), (2039, 1240, 1425),
+        (257, 160, 171), (691, 440, 437), (1045, 680, 627), (301, 200, 171), (177, 120, 95), (2141, 1480, 1083), (1079, 760, 513), (725, 520, 323),
+        (137, 100, 57), (2209, 1640, 855), (53, 40, 19), (2243, 1720, 741), (565, 440, 171), (2325, 1840, 579), (589, 480, 131), (981, 820, 185),
+        (331, 280, 51), (1413, 1220, 255), (355, 310, 57), (1485, 1320, 231), (79, 70, 11), (314, 280, 43), (1101, 1000, 123), (42, 38, 5),
+        (481, 440, 53), (229, 210, 23), (1973, 1820, 191), (991, 920, 87), (497, 466, 37), (251, 236, 19), (983, 928, 69), (61, 58, 3),
+        (497, 472, 29), (251, 238, 15), (983, 952, 35), (993, 968, 27), (1003, 982, 21), (1013, 992, 19), (1023, 1002, 17), (2033, 2012, 15),
+        (513, 506, 5), (1021, 1010, 7), (511, 504, 5), (1021, 1014, 5), (511, 506, 3), (511, 507, 2), (1023, 1018, 3), (2047, 2042, 3),
+        (511, 508, 1), (2045, 2044, 1), (1023, 1022, 1), (2047, 2046, 1), (1535, 1534, 1), (511, 511, 0), (1535, 1535, 0), (1023, 1023, 0),
+        (511, 511, 0), (511, 511, 0), (1023, 1023, 0), (1535, 1535, 0), (2047, 2047, 0), (511, 511, 0), (511, 511, 0), (511, 511, 0),
+        (511, 511, 0), (1023, 1023, 0), (1023, 1023, 0), (1023, 1023, 0), (1023, 1023, 0), (1535, 1535, 0), (1535, 1535, 0), (511, 511, 0),
+        (1023, 1023, 0), (1535, 1535, 0), (511, 511, 0), (511, 511, 0), (1023, 1023, 0), (1535, 1535, 0), (2047, 2047, 0), (1535, 1535, 0),
+        (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (2047, 2047, 0), (2047, 2047, 0),
+        (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0),
+        (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (1535, 1535, 0), (2047, 2047, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0),
+        (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0),
+        (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0),
+        (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0),
+        (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0),
+        (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0),
+        (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0),
+        (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0),
+        (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0),
+        (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0),
+        (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0),
+        (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0),
+        (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0),
+        (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0),
+        (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0), (1535, 1535, 0), (1023, 1023, 0), (2047, 2047, 0)
+    ]
+    
+    @staticmethod
+    def get_parameter_info():
+        """
+        Returns metadata about configurable parameters for this dithering mode.
+        """
+        return {
+            'serpentine': {
+                'type': 'choice',
+                'default': 'true',
+                'choices': ['true', 'false'],
+                'label': 'Serpentine Scan',
+                'description': 'Alternates direction each row to reduce artifacts'
+            }
+        }
+    
+    def __init__(self, serpentine: str = 'true'):
+        """
+        Initialize Ostromoukhov error diffusion.
+        
+        Args:
+            serpentine: Whether to use serpentine scanning (alternating row directions)
+        """
+        self.serpentine = (serpentine == 'true')
+    
+    def get_current_parameters(self):
+        """Returns current parameter values."""
+        return {
+            'serpentine': 'true' if self.serpentine else 'false'
+        }
+    
+    def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
+               image_size: Tuple[int, int]) -> np.ndarray:
+        h, w = image_size
+        work_2d = pixels.reshape((h, w, 3)).astype(np.float32).copy()
+        tree = KDTree(palette_arr)
+        
+        for y in range(h):
+            # Serpentine scanning: alternate row direction
+            if self.serpentine and (y % 2 == 1):
+                x_range = range(w - 1, -1, -1)
+                x_direction = -1
+            else:
+                x_range = range(w)
+                x_direction = 1
+            
+            for x in x_range:
+                old_val = work_2d[y, x].copy()
+                
+                # Find nearest palette color
+                _, idx = tree.query(old_val, k=1)
+                chosen = palette_arr[idx]
+                work_2d[y, x] = chosen
+                
+                # Calculate error
+                err = old_val - chosen
+                
+                # Get variable coefficients based on pixel intensity (luminance)
+                luminance = 0.299 * old_val[0] + 0.587 * old_val[1] + 0.114 * old_val[2]
+                intensity_idx = int(np.clip(luminance, 0, 255))
+                c0, c1, c2 = self.COEFFS_TABLE[intensity_idx]
+                divisor = c0 + c1 + c2
+                
+                if divisor == 0:
+                    continue
+                
+                # Distribute error using variable coefficients
+                # Pattern:  [ ] [X] [ ]
+                #           [ ] [ ] [ ]
+                # becomes:  [X] c0→
+                #           c1↙ c2↓
+                
+                # Right pixel (c0)
+                nx = x + x_direction
+                if 0 <= nx < w:
+                    work_2d[y, nx] += err * (c0 / divisor)
+                
+                # Bottom row
+                if y + 1 < h:
+                    # Bottom-left pixel (c1)
+                    nx = x - x_direction
+                    if 0 <= nx < w:
+                        work_2d[y + 1, nx] += err * (c1 / divisor)
+                    
+                    # Bottom pixel (c2)
+                    work_2d[y + 1, x] += err * (c2 / divisor)
+        
+        np.clip(work_2d, 0, 255, out=work_2d)
+        return work_2d.reshape((-1, 3))
+
+
 # -------------------- Halftone Dithering --------------------
 
 class HalftoneDitherStrategy(BaseDitherStrategy):
@@ -1166,6 +1307,8 @@ class ImageDitherer:
             return AdaptiveVarianceDitherStrategy.get_parameter_info()
         elif mode == DitherMode.HYBRID:
             return HybridDitherStrategy.get_parameter_info()
+        elif mode == DitherMode.OSTROMOUKHOV:
+            return OstromoukhovDitherStrategy.get_parameter_info()
         # Add other modes here as they become configurable
         return None
     
@@ -1226,6 +1369,12 @@ class ImageDitherer:
             settings = {key: info['default'] for key, info in params.items()}
             settings.update(self.dither_params)
             return HalftoneDitherStrategy(**settings)
+        elif mode == DitherMode.OSTROMOUKHOV:
+            # Ostromoukhov's variable error diffusion with configurable parameters
+            params = OstromoukhovDitherStrategy.get_parameter_info()
+            settings = {key: info['default'] for key, info in params.items()}
+            settings.update(self.dither_params)
+            return OstromoukhovDitherStrategy(**settings)
         else:
             raise ValueError(f"Unrecognized DitherMode: {mode}")
 

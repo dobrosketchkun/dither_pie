@@ -16,20 +16,25 @@ A powerful Python-based GUI application for applying artistic dithering and pixe
 - **Regular**: Fast nearest-neighbor downsampling for classic pixel art
 - **Neural**: AI-powered artistic pixelization using PyTorch models
 
-### 11 Dithering Algorithms
-- **Bayer Matrices** (2x2, 4x4, 8x8, 16x16) - Ordered dithering patterns
-- **Riemersma** - Hilbert curve-based error diffusion
-- **Blue Noise** - High-quality spatial distribution
-- **Polka Dot** - Circular threshold patterns
-- **Wavelet** - Multi-scale frequency decomposition
-- **Adaptive Variance** - Context-aware dithering
+### 12 Dithering Algorithms
+- **Bayer** - Ordered dithering with configurable matrix size (2x2, 4x4, 8x8, 16x16)
+- **Error Diffusion** - 8 classic algorithms in one: Floyd-Steinberg, JJN, Stucki, Burkes, Atkinson, Sierra (3 variants)
+- **Ostromoukhov** - Adaptive error diffusion with variable coefficients
+- **Riemersma** - Hilbert curve-based space-filling error diffusion
+- **Blue Noise** - High-quality spatial distribution with configurable seed
+- **Polka Dot** - Retro circular threshold patterns
+- **Halftone** - Newspaper-style printing simulation with rotating screens
+- **Wavelet** - Multi-scale frequency decomposition dithering
+- **Adaptive Variance** - Context-aware dithering based on local variance
 - **Perceptual** - Luminance-preserving error diffusion
-- **Hybrid** - Separates luminance/color for detail preservation
+- **Hybrid** - Separates luminance/color channels for detail preservation
 
 ### Advanced Features
-- 🚀 **Smart Caching**: Re-dither without re-pixelizing
+- 🚀 **Smart Caching**: Re-dither without re-pixelizing, blue noise matrices cached in memory
 - 👁️ **Live Palette Preview**: See results in main window before applying
-- ⚡ **Skip Pixelization**: Apply dithering directly to full-resolution images
+- 🔄 **Toggle View During Preview**: Compare original with preview while selecting palette
+- ⚙️ **Configurable Algorithms**: Fine-tune parameters for 10+ dithering modes via settings dialog
+- 🌀 **Animated Status Bar**: Visual feedback with customizable spinner animations
 - 💾 **Persistent Settings**: Window position, defaults, and paths remembered
 - 🎨 **Custom Palettes**: Create, import from lospec.com, or extract from images
 
@@ -68,15 +73,15 @@ A powerful Python-based GUI application for applying artistic dithering and pixe
 
 ### Dithering Modes Showcase
 > **TODO: Grid showing the same image with different dithering algorithms:**
-> - Bayer 4x4
-> - Riemersma
+> - Bayer (4x4)
+> - Error Diffusion (Floyd-Steinberg)
+> - Error Diffusion (Atkinson)
 > - Blue Noise
+> - Halftone
 > - Hybrid
-> - Wavelet
-> - Perceptual
 > - All using same palette (16 colors)
-> - 2x3 or 3x2 grid layout
-> - Labels showing mode name
+> - 2x3 grid layout
+> - Labels showing mode name and variant
 
 ![Dithering Algorithms](path/to/screenshot_dither_modes.png)
 
@@ -138,8 +143,8 @@ Place in project root:
 ```
 1. Load Image
 2. Pixelize (Regular) - Max Size: 64
-3. Apply Dithering - Bayer4x4, 16 colors
-4. Enable "Upscale to original size"
+3. Apply Dithering - Bayer (4x4), 16 colors
+4. Enable "Final resize"
 5. Save Result
 ```
 
@@ -183,31 +188,23 @@ Palettes stored in `palette.json`:
 }
 ```
 
----
+### Live Preview Workflow
+During palette selection, you can:
+- **View Live Previews**: Each palette generates a preview shown in the main window
+- **Toggle View**: Click "Toggle View" button to compare original image with current preview
+- **Adjust Settings**: Change dither mode or parameters (⚙️) while previewing
+- **Zoom & Pan**: Examine details - zoom/pan state preserved between palette switches
+- **Toggle Gamma**: See instant difference with/without gamma correction
 
-## ⚡ Performance Features
-
-### Smart Pixelization Cache
-> **TODO: Diagram or flowchart showing:**
-> - User pixelizes image → Result cached
-> - User tries different dithering → Uses cache (instant)
-> - User changes max_size → Cache invalidated, re-pixelize
-> - Arrows showing "Cache Hit" vs "Cache Miss" paths
-
-![Cache System](path/to/diagram_cache.png)
-
-**Benefits:**
-- Neural pixelization: 5-30 seconds saved per cache hit
-- Experiment with dithering settings instantly
-- No manual management needed
-
-### Multi-core Video Processing
-- Automatic worker pool (up to 4 cores)
-- Batch processing for efficiency
-- Progress tracking in real-time
-- Audio/subtitle preservation
+This allows you to:
+1. Select a palette → Preview appears
+2. Toggle to original → Compare side-by-side mentally
+3. Try another palette → Toggle back to see new preview
+4. Adjust parameters → Preview updates automatically
+5. Apply when satisfied
 
 ---
+
 
 ## 🎛️ Configuration System
 
@@ -225,8 +222,11 @@ User preferences automatically saved to `config.json`:
   "defaults": {
     "max_size": 640,
     "num_colors": 16,
-    "dither_mode": "bayer4x4",
+    "dither_mode": "bayer",
     "use_gamma": false
+  },
+  "ui": {
+    "spinner_name": "dots"
   },
   "paths": {
     "last_image_dir": "C:/Users/...",
@@ -236,12 +236,6 @@ User preferences automatically saved to `config.json`:
 }
 ```
 
-**What's Remembered:**
-- ✅ Window size and position
-- ✅ All processing defaults
-- ✅ Last used directories
-- ✅ Theme preferences
-- ✅ Recent files list
 
 ---
 
@@ -254,17 +248,6 @@ User preferences automatically saved to `config.json`:
 - H.264 encoding with yuv420p
 - Even dimension enforcement (codec compatibility)
 
-### Performance
-> **TODO: Table or chart showing:**
-> - Video length vs processing time
-> - Different settings (regular vs neural, resolution)
-> - Example: "1080p 30fps 1min video: ~2 min (regular), ~15 min (neural)"
-
-| Video | Settings | Processing Time |
-|-------|----------|----------------|
-| 1080p 30fps 60sec | Regular + Bayer | ~2 minutes |
-| 1080p 30fps 60sec | Neural + Blue Noise | ~15 minutes |
-| 720p 24fps 30sec | Regular + Riemersma | ~45 seconds |
 
 ### Video Workflow
 1. Load video → Shows first frame
@@ -275,14 +258,45 @@ User preferences automatically saved to `config.json`:
 
 ---
 
+## ⚙️ Configurable Dithering Parameters
+
+Many dithering modes include adjustable parameters accessible via the **⚙️ settings button** next to the dithering mode dropdown.
+
+### Algorithms with Settings
+
+| Algorithm | Configurable Parameters | Description |
+|-----------|------------------------|-------------|
+| **Bayer** | Matrix Size | Choose 2x2, 4x4, 8x8, or 16x16 (default: 4x4) |
+| **Error Diffusion** | Variant, Serpentine Scan | 8 algorithms: Floyd-Steinberg, JJN, Stucki, Burkes, Atkinson, Sierra (3 variants). Toggle serpentine scanning for artifact reduction. |
+| **Ostromoukhov** | Serpentine Scan | Adaptive error diffusion with optional serpentine scanning |
+| **Blue Noise** | Matrix Size, Random Seed | Size (64-512), seed for reproducible patterns |
+| **Polka Dot** | Tile Size, Gamma | Dot pattern size and gamma adjustment |
+| **Halftone** | Cell Size, Screen Angle, Dot Gain, Dot Size Range, Shape, Sharpness | Full control over newspaper-style halftone printing |
+| **Wavelet** | Wavelet Type, Subband Quantization | Choose wavelet family (haar, db1-10) and quantization strength |
+| **Adaptive Variance** | Variance Threshold, Window Radius | Context-awareness sensitivity and local analysis window |
+| **Hybrid** | Luminance Factor, Color Factor | Balance between luminance and color channel processing |
+
+### How to Use Settings
+1. Select a dithering mode from dropdown
+2. Click **⚙️** button (enabled for modes with parameters)
+3. Adjust parameters in dialog
+4. Click **Apply** to update preview instantly
+5. Changes are cached with each palette for easy comparison
+
+**Note:** Settings button is disabled for modes without configurable parameters (None, Riemersma, Perceptual).
+
+---
+
 ## 💡 Tips & Best Practices
 
 ### For Best Quality
 - ✅ Use **Neural pixelization** for organic subjects (faces, nature)
 - ✅ Use **Regular pixelization** for geometric/UI elements
 - ✅ Enable **Gamma correction** for accurate color perception
-- ✅ Try **Blue Noise** or **Hybrid** dithering for smooth gradients
-- ✅ Use **Riemersma** for detailed line art
+- ✅ Try **Blue Noise**, **Error Diffusion (Atkinson)**, or **Hybrid** for smooth gradients
+- ✅ Use **Halftone** for authentic newspaper/magazine printing effects
+- ✅ Use **Riemersma** or **Error Diffusion (Floyd-Steinberg)** for detailed line art
+- ✅ Adjust algorithm parameters via ⚙️ settings button for fine control
 
 ### Performance Tips
 - ✅ Test on random frames before processing full video
@@ -291,10 +305,12 @@ User preferences automatically saved to `config.json`:
 - ✅ Preview different palettes without re-pixelizing (uses cache)
 
 ### Common Use Cases
-- **Print/Halftone Effects**: Dither only (no pixelization), high color count
-- **8-bit Game Art**: Regular + Bayer 4x4, 4-16 colors, custom palette
-- **Artistic Effects**: Neural + Blue Noise, 32-64 colors, gamma on
-- **Web Optimization**: Dither + resize for smaller file sizes
+- **Print/Halftone Effects**: Halftone mode (no pixelization), adjust screen angle and dot size
+- **8-bit Game Art**: Regular + Bayer (4x4), 4-16 colors, custom palette
+- **Retro Mac Look**: Error Diffusion (Atkinson variant), serpentine off
+- **Artistic Effects**: Neural + Blue Noise or Error Diffusion (JJN), 32-64 colors, gamma on
+- **Newspaper Style**: Halftone mode with 6-8 colors, angle 45°, gamma on
+- **Web Optimization**: Dither + resize for smaller file sizes with preserved detail
 
 ---
 
@@ -302,13 +318,14 @@ User preferences automatically saved to `config.json`:
 
 ### Architecture
 ```
-dither_pie.py          → Main GUI (customtkinter)
-dithering_lib.py       → 11 dithering algorithms (strategy pattern)
-video_processor.py     → Multi-core video processing
-config_manager.py      → Persistent configuration
-gui_components.py      → Reusable UI widgets
-utils.py              → Palette management
-models/               → Neural pixelization models
+dither_pie.py          → Main GUI (customtkinter) with live preview system
+dithering_lib.py       → 12 dithering algorithms with configurable parameters
+video_processor.py     → Multi-core video processing with FFmpeg
+config_manager.py      → Persistent configuration with JSON storage
+gui_components.py      → Reusable UI widgets (settings dialog, animated status bar)
+utils.py              → Palette management (generation, import, extraction)
+models/               → Neural pixelization models (PyTorch)
+spinners.json         → Animated spinner definitions for status bar
 ```
 
 ### Dependencies
@@ -317,6 +334,21 @@ models/               → Neural pixelization models
 - **ML**: PyTorch, scikit-learn
 - **Video**: FFmpeg (subprocess), opencv-python
 - **Math**: scipy, pywavelets
+
+### Technical Highlights
+- **Strategy Pattern**: Each dithering algorithm is a separate strategy class
+- **Metadata-Driven UI**: Parameter dialogs generated from algorithm metadata (`get_parameter_info()`)
+- **Separation of Concerns**: GUI and core algorithms are fully decoupled
+- **Smart Caching**: Multi-level caching (pixelization, preview, blue noise matrices)
+- **Live Preview System**: Non-blocking preview generation with threading
+- **Animated Feedback**: Status bar with configurable spinner animations from `spinners.json`
+- **State Management**: Palette dialog state tracking for toggle view functionality
+
+### Key Design Decisions
+- **No Parameter Persistence Across Modes**: Each algorithm starts with defaults when selected
+- **Preview Cache by Settings**: Cache key includes palette, gamma, dither mode, and all parameters
+- **In-Memory Blue Noise**: Generated matrices cached during session, not persisted
+- **Serpentine Off by Default**: Cleaner look for most use cases, easily toggled in settings
 
 ### Credits
 Neural pixelization models from:
@@ -328,12 +360,15 @@ Neural pixelization models from:
 ## 📝 Changelog
 
 ### Latest Features
-- ✨ Live palette preview in main window
-- ✨ Smart pixelization caching
-- ✨ Dithering without pixelization
-- ✨ Persistent user preferences (config.json)
-- ✨ Recent files tracking
-- ✨ Last used directory memory
+- ✨ **Configurable Dithering Algorithms**: Settings dialog (⚙️) for fine-tuning 10+ modes
+- ✨ **Consolidated Algorithms**: Bayer sizes and Error Diffusion variants in single modes
+- ✨ **Toggle View During Preview**: Compare original with dithered preview in real-time
+- ✨ **Animated Status Bar**: Visual feedback with customizable spinner styles
+- ✨ **Blue Noise Caching**: Generated matrices cached in memory for performance
+- ✨ **Halftone Mode**: Authentic newspaper printing simulation with configurable parameters
+- ✨ **Live Palette Preview**: See results in main window before applying
+- ✨ **Smart Pixelization Caching**: Instant re-dithering without re-processing
+- ✨ **Persistent User Preferences**: All settings saved to config.json
 
 ### Coming Soon
 - 🔜 Batch image processing

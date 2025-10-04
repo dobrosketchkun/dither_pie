@@ -21,6 +21,7 @@ class DitherMode(Enum):
     BAYER = "bayer"
     FLOYD_STEINBERG = "floyd_steinberg"
     JJN = "jjn"
+    SIERRA = "sierra"
     RIEMERSMA = "riemersma"
     BLUE_NOISE = "blue_noise"
     POLKA_DOT = "polka_dot"
@@ -940,6 +941,195 @@ class JJNDitherStrategy(BaseDitherStrategy):
         return work_2d.reshape((-1, 3))
 
 
+# -------------------- Sierra Family Error Diffusion --------------------
+
+class SierraDitherStrategy(BaseDitherStrategy):
+    """
+    Sierra family of error diffusion algorithms by Frankie Sierra.
+    Offers three variants with different kernel sizes and quality/speed tradeoffs.
+    
+    Variants:
+    - Sierra (Full): 10 neighbors, highest quality, slowest
+           [ ] [ ] [X] 5  3
+       2   4   5   4   2
+           2   3   2
+    
+    - Two-Row Sierra: 8 neighbors, balanced quality/speed
+           [ ] [ ] [X] 4  3
+       1   2   3   2   1
+    
+    - Sierra Lite: 4 neighbors, fastest, good quality
+           [ ] [X] 2
+       1   1
+    """
+    
+    @staticmethod
+    def get_parameter_info():
+        """
+        Returns metadata about configurable parameters for this dithering mode.
+        """
+        return {
+            'variant': {
+                'type': 'choice',
+                'default': 'sierra',
+                'choices': ['sierra', 'two_row', 'lite'],
+                'label': 'Variant',
+                'description': 'Sierra variant (sierra=highest quality, lite=fastest)'
+            },
+            'serpentine': {
+                'type': 'choice',
+                'default': 'true',
+                'choices': ['true', 'false'],
+                'label': 'Serpentine Scan',
+                'description': 'Alternates direction each row to reduce artifacts'
+            }
+        }
+    
+    def __init__(self, variant: str = 'sierra', serpentine: str = 'true'):
+        """
+        Initialize Sierra error diffusion.
+        
+        Args:
+            variant: 'sierra' (full), 'two_row', or 'lite'
+            serpentine: Whether to use serpentine scanning
+        """
+        self.variant = variant
+        self.serpentine = (serpentine == 'true')
+    
+    def get_current_parameters(self):
+        """Returns current parameter values."""
+        return {
+            'variant': self.variant,
+            'serpentine': 'true' if self.serpentine else 'false'
+        }
+    
+    def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
+               image_size: Tuple[int, int]) -> np.ndarray:
+        h, w = image_size
+        work_2d = pixels.reshape((h, w, 3)).astype(np.float32).copy()
+        tree = KDTree(palette_arr)
+        
+        for y in range(h):
+            # Serpentine scanning: alternate row direction
+            if self.serpentine and (y % 2 == 1):
+                x_range = range(w - 1, -1, -1)
+                x_direction = -1
+            else:
+                x_range = range(w)
+                x_direction = 1
+            
+            for x in x_range:
+                old_val = work_2d[y, x].copy()
+                
+                # Find nearest palette color
+                _, idx = tree.query(old_val, k=1)
+                chosen = palette_arr[idx]
+                work_2d[y, x] = chosen
+                
+                # Calculate error
+                err = old_val - chosen
+                
+                # Distribute error based on variant
+                if self.variant == 'sierra':
+                    self._distribute_sierra_full(work_2d, x, y, w, h, err, x_direction)
+                elif self.variant == 'two_row':
+                    self._distribute_sierra_two_row(work_2d, x, y, w, h, err, x_direction)
+                elif self.variant == 'lite':
+                    self._distribute_sierra_lite(work_2d, x, y, w, h, err, x_direction)
+        
+        np.clip(work_2d, 0, 255, out=work_2d)
+        return work_2d.reshape((-1, 3))
+    
+    def _distribute_sierra_full(self, work_2d, x, y, w, h, err, x_direction):
+        """Sierra (full) - 10 neighbors, divisor = 32"""
+        # Current row (y)
+        nx = x + x_direction
+        if 0 <= nx < w:
+            work_2d[y, nx] += err * (5.0 / 32.0)
+        
+        nx = x + 2 * x_direction
+        if 0 <= nx < w:
+            work_2d[y, nx] += err * (3.0 / 32.0)
+        
+        # Next row (y+1)
+        if y + 1 < h:
+            nx = x - 2 * x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (2.0 / 32.0)
+            
+            nx = x - x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (4.0 / 32.0)
+            
+            work_2d[y + 1, x] += err * (5.0 / 32.0)
+            
+            nx = x + x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (4.0 / 32.0)
+            
+            nx = x + 2 * x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (2.0 / 32.0)
+        
+        # Two rows down (y+2)
+        if y + 2 < h:
+            nx = x - x_direction
+            if 0 <= nx < w:
+                work_2d[y + 2, nx] += err * (2.0 / 32.0)
+            
+            work_2d[y + 2, x] += err * (3.0 / 32.0)
+            
+            nx = x + x_direction
+            if 0 <= nx < w:
+                work_2d[y + 2, nx] += err * (2.0 / 32.0)
+    
+    def _distribute_sierra_two_row(self, work_2d, x, y, w, h, err, x_direction):
+        """Two-Row Sierra - 8 neighbors, divisor = 16"""
+        # Current row (y)
+        nx = x + x_direction
+        if 0 <= nx < w:
+            work_2d[y, nx] += err * (4.0 / 16.0)
+        
+        nx = x + 2 * x_direction
+        if 0 <= nx < w:
+            work_2d[y, nx] += err * (3.0 / 16.0)
+        
+        # Next row (y+1)
+        if y + 1 < h:
+            nx = x - 2 * x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (1.0 / 16.0)
+            
+            nx = x - x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (2.0 / 16.0)
+            
+            work_2d[y + 1, x] += err * (3.0 / 16.0)
+            
+            nx = x + x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (2.0 / 16.0)
+            
+            nx = x + 2 * x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (1.0 / 16.0)
+    
+    def _distribute_sierra_lite(self, work_2d, x, y, w, h, err, x_direction):
+        """Sierra Lite - 4 neighbors, divisor = 4"""
+        # Current row (y)
+        nx = x + x_direction
+        if 0 <= nx < w:
+            work_2d[y, nx] += err * (2.0 / 4.0)
+        
+        # Next row (y+1)
+        if y + 1 < h:
+            nx = x - x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (1.0 / 4.0)
+            
+            work_2d[y + 1, x] += err * (1.0 / 4.0)
+
+
 # -------------------- Ostromoukhov's Variable Error Diffusion --------------------
 
 class OstromoukhovDitherStrategy(BaseDitherStrategy):
@@ -1606,6 +1796,8 @@ class ImageDitherer:
             return FloydSteinbergDitherStrategy.get_parameter_info()
         elif mode == DitherMode.JJN:
             return JJNDitherStrategy.get_parameter_info()
+        elif mode == DitherMode.SIERRA:
+            return SierraDitherStrategy.get_parameter_info()
         elif mode == DitherMode.OSTROMOUKHOV:
             return OstromoukhovDitherStrategy.get_parameter_info()
         # Add other modes here as they become configurable
@@ -1649,6 +1841,12 @@ class ImageDitherer:
             settings = {key: info['default'] for key, info in params.items()}
             settings.update(self.dither_params)
             return JJNDitherStrategy(**settings)
+        elif mode == DitherMode.SIERRA:
+            # Sierra with configurable parameters
+            params = SierraDitherStrategy.get_parameter_info()
+            settings = {key: info['default'] for key, info in params.items()}
+            settings.update(self.dither_params)
+            return SierraDitherStrategy(**settings)
         elif mode == DitherMode.RIEMERSMA:
             return RiemersmaDitherStrategy()
         elif mode == DitherMode.WAVELET:

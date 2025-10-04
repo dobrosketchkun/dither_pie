@@ -249,7 +249,7 @@ class ErrorDiffusionDitherStrategy(BaseDitherStrategy):
         return {
             'variant': {
                 'type': 'choice',
-                'default': 'floyd_steinberg',
+                'default': 'atkinson',
                 'choices': ['floyd_steinberg', 'jjn', 'stucki', 'burkes', 'atkinson', 
                            'sierra', 'sierra_two_row', 'sierra_lite'],
                 'label': 'Algorithm',
@@ -257,14 +257,14 @@ class ErrorDiffusionDitherStrategy(BaseDitherStrategy):
             },
             'serpentine': {
                 'type': 'choice',
-                'default': 'true',
+                'default': 'false',
                 'choices': ['true', 'false'],
                 'label': 'Serpentine Scan',
                 'description': 'Alternates direction each row to reduce artifacts'
             }
         }
     
-    def __init__(self, variant: str = 'floyd_steinberg', serpentine: str = 'true'):
+    def __init__(self, variant: str = 'atkinson', serpentine: str = 'false'):
         """
         Initialize error diffusion with specified variant.
         
@@ -1087,14 +1087,14 @@ class FloydSteinbergDitherStrategy(BaseDitherStrategy):
         return {
             'serpentine': {
                 'type': 'choice',
-                'default': 'true',
+                'default': 'false',
                 'choices': ['true', 'false'],
                 'label': 'Serpentine Scan',
                 'description': 'Alternates direction each row to reduce artifacts'
             }
         }
     
-    def __init__(self, serpentine: str = 'true'):
+    def __init__(self, serpentine: str = 'false'):
         """
         Initialize Floyd-Steinberg error diffusion.
         
@@ -1188,14 +1188,14 @@ class JJNDitherStrategy(BaseDitherStrategy):
         return {
             'serpentine': {
                 'type': 'choice',
-                'default': 'true',
+                'default': 'false',
                 'choices': ['true', 'false'],
                 'label': 'Serpentine Scan',
                 'description': 'Alternates direction each row to reduce artifacts'
             }
         }
     
-    def __init__(self, serpentine: str = 'true'):
+    def __init__(self, serpentine: str = 'false'):
         """
         Initialize JJN error diffusion.
         
@@ -1319,14 +1319,14 @@ class AtkinsonDitherStrategy(BaseDitherStrategy):
         return {
             'serpentine': {
                 'type': 'choice',
-                'default': 'true',
+                'default': 'false',
                 'choices': ['true', 'false'],
                 'label': 'Serpentine Scan',
                 'description': 'Alternates direction each row to reduce artifacts'
             }
         }
     
-    def __init__(self, serpentine: str = 'true'):
+    def __init__(self, serpentine: str = 'false'):
         """
         Initialize Atkinson error diffusion.
         
@@ -1439,14 +1439,14 @@ class SierraDitherStrategy(BaseDitherStrategy):
             },
             'serpentine': {
                 'type': 'choice',
-                'default': 'true',
+                'default': 'false',
                 'choices': ['true', 'false'],
                 'label': 'Serpentine Scan',
                 'description': 'Alternates direction each row to reduce artifacts'
             }
         }
     
-    def __init__(self, variant: str = 'sierra', serpentine: str = 'true'):
+    def __init__(self, variant: str = 'sierra', serpentine: str = 'false'):
         """
         Initialize Sierra error diffusion.
         
@@ -1616,14 +1616,14 @@ class StuckiDitherStrategy(BaseDitherStrategy):
         return {
             'serpentine': {
                 'type': 'choice',
-                'default': 'true',
+                'default': 'false',
                 'choices': ['true', 'false'],
                 'label': 'Serpentine Scan',
                 'description': 'Alternates direction each row to reduce artifacts'
             }
         }
     
-    def __init__(self, serpentine: str = 'true'):
+    def __init__(self, serpentine: str = 'false'):
         """
         Initialize Stucki error diffusion.
         
@@ -1746,14 +1746,14 @@ class BurkesDitherStrategy(BaseDitherStrategy):
         return {
             'serpentine': {
                 'type': 'choice',
-                'default': 'true',
+                'default': 'false',
                 'choices': ['true', 'false'],
                 'label': 'Serpentine Scan',
                 'description': 'Alternates direction each row to reduce artifacts'
             }
         }
     
-    def __init__(self, serpentine: str = 'true'):
+    def __init__(self, serpentine: str = 'false'):
         """
         Initialize Burkes error diffusion.
         
@@ -1889,14 +1889,14 @@ class OstromoukhovDitherStrategy(BaseDitherStrategy):
         return {
             'serpentine': {
                 'type': 'choice',
-                'default': 'true',
+                'default': 'false',
                 'choices': ['true', 'false'],
                 'label': 'Serpentine Scan',
                 'description': 'Alternates direction each row to reduce artifacts'
             }
         }
     
-    def __init__(self, serpentine: str = 'true'):
+    def __init__(self, serpentine: str = 'false'):
         """
         Initialize Ostromoukhov error diffusion.
         

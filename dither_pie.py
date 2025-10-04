@@ -84,6 +84,8 @@ class DitheringApp(ctk.CTk):
         # Palette dialog state
         self.palette_dialog_open = False  # Track if palette dialog is open
         self.on_dither_mode_changed_callback = None  # Callback for dither mode changes during palette preview
+        self.palette_showing_preview = True  # Track if showing preview (True) or original (False) during palette selection
+        self.palette_original_image = None  # Store original image to restore during toggle
         
         # Pixelization cache tracking
         self.pixelization_cache = {
@@ -450,8 +452,7 @@ class DitheringApp(ctk.CTk):
         self.btn_dither.configure(state="disabled")
         self.apply_video_button.configure(state="disabled")
         self.btn_save.configure(state="disabled")
-        self.btn_toggle.configure(state="disabled")
-        # Keep btn_fit, dither_dropdown, and dither_settings_button enabled so user can adjust settings while choosing palette
+        # Keep btn_toggle, btn_fit, dither_dropdown, and dither_settings_button enabled so user can view/adjust while choosing palette
         self.max_size_entry.configure(state="disabled")
         self.colors_entry.configure(state="disabled")
         self.resize_multiplier_entry.configure(state="disabled")
@@ -468,8 +469,8 @@ class DitheringApp(ctk.CTk):
         self.btn_dither.configure(state="normal")
         self.apply_video_button.configure(state="normal")
         self.btn_save.configure(state="normal")
-        self.btn_toggle.configure(state="normal")
-        self.btn_fit.configure(state="normal")  # Re-enable for consistency
+        # btn_toggle already enabled
+        # btn_fit already enabled
         self.max_size_entry.configure(state="normal")
         self.colors_entry.configure(state="normal")
         self.resize_multiplier_entry.configure(state="normal")
@@ -822,6 +823,7 @@ class DitheringApp(ctk.CTk):
         
         # Mark palette dialog as open
         self.palette_dialog_open = True
+        self.palette_showing_preview = True  # Start by showing preview
         
         selected_palette = [None]  # Use list to allow modification in nested function
         
@@ -833,6 +835,9 @@ class DitheringApp(ctk.CTk):
             original_displayed_image = self.pixelized_image
         else:
             original_displayed_image = self.current_image
+        
+        # Store for toggle view functionality
+        self.palette_original_image = original_displayed_image
         
         # Cache for preview results
         preview_cache = {}
@@ -985,6 +990,10 @@ class DitheringApp(ctk.CTk):
             Fits to window on first preview, then preserves zoom/pan on subsequent updates.
             This allows user to zoom into a specific area and compare different palettes/gamma settings.
             """
+            # Don't update display if user toggled to show original
+            if not self.palette_showing_preview:
+                return
+            
             if first_preview[0]:
                 # First preview: fit to window for initial view
                 self.image_viewer.set_image(preview_img, update=False)
@@ -1154,6 +1163,8 @@ class DitheringApp(ctk.CTk):
             # Reset palette dialog state
             self.palette_dialog_open = False
             self.on_dither_mode_changed_callback = None
+            self.palette_showing_preview = True
+            self.palette_original_image = None
             
             self._update_resize_preview()
             dialog.destroy()
@@ -1174,6 +1185,8 @@ class DitheringApp(ctk.CTk):
             # Reset palette dialog state
             self.palette_dialog_open = False
             self.on_dither_mode_changed_callback = None
+            self.palette_showing_preview = True
+            self.palette_original_image = None
             
             dialog.destroy()
         
@@ -1396,6 +1409,24 @@ class DitheringApp(ctk.CTk):
     
     def toggle_view(self):
         """Toggle between current, pixelized, and dithered views."""
+        # Special handling during palette selection
+        if self.palette_dialog_open:
+            if self.palette_showing_preview:
+                # Switch to original image
+                if self.palette_original_image:
+                    self.image_viewer.set_image(self.palette_original_image, update=False)
+                    self.palette_showing_preview = False
+                    self.fit_to_window()
+                    self.status_bar.set_status("Showing original (toggle to return to preview)")
+            else:
+                # Switch back to preview - trigger regeneration
+                if self.on_dither_mode_changed_callback:
+                    self.palette_showing_preview = True
+                    self.on_dither_mode_changed_callback()
+                    self.status_bar.set_status("Showing preview")
+            return
+        
+        # Normal toggle behavior when palette dialog is not open
         if self.display_state == "current":
             if self.pixelized_image:
                 self.image_viewer.set_image(self.pixelized_image, update=False)

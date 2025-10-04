@@ -19,12 +19,7 @@ import heapq
 class DitherMode(Enum):
     NONE = "none"
     BAYER = "bayer"
-    FLOYD_STEINBERG = "floyd_steinberg"
-    JJN = "jjn"
-    STUCKI = "stucki"
-    BURKES = "burkes"
-    ATKINSON = "atkinson"
-    SIERRA = "sierra"
+    ERROR_DIFFUSION = "error_diffusion"
     RIEMERSMA = "riemersma"
     BLUE_NOISE = "blue_noise"
     POLKA_DOT = "polka_dot"
@@ -226,6 +221,361 @@ class BlueNoiseDitherStrategy(MatrixDitherStrategy):
             'size': self.size,
             'seed': self.seed
         }
+
+
+# -------------------- Unified Error Diffusion Strategy --------------------
+
+class ErrorDiffusionDitherStrategy(BaseDitherStrategy):
+    """
+    Unified error diffusion strategy supporting multiple classic algorithms.
+    All variants use fixed-weight error distribution to neighboring pixels.
+    
+    Variants:
+    - Floyd-Steinberg: 4 neighbors, classic and fast
+    - JJN: 12 neighbors, smooth gradients
+    - Stucki: 12 neighbors, photographic quality
+    - Burkes: 7 neighbors, balanced speed/quality
+    - Atkinson: 6 neighbors, classic Mac look (loses 25% error)
+    - Sierra: 10 neighbors, high quality
+    - Sierra Two-Row: 8 neighbors, balanced
+    - Sierra Lite: 4 neighbors, fast
+    """
+    
+    @staticmethod
+    def get_parameter_info():
+        """
+        Returns metadata about configurable parameters for this dithering mode.
+        """
+        return {
+            'variant': {
+                'type': 'choice',
+                'default': 'floyd_steinberg',
+                'choices': ['floyd_steinberg', 'jjn', 'stucki', 'burkes', 'atkinson', 
+                           'sierra', 'sierra_two_row', 'sierra_lite'],
+                'label': 'Algorithm',
+                'description': 'Error diffusion algorithm variant'
+            },
+            'serpentine': {
+                'type': 'choice',
+                'default': 'true',
+                'choices': ['true', 'false'],
+                'label': 'Serpentine Scan',
+                'description': 'Alternates direction each row to reduce artifacts'
+            }
+        }
+    
+    def __init__(self, variant: str = 'floyd_steinberg', serpentine: str = 'true'):
+        """
+        Initialize error diffusion with specified variant.
+        
+        Args:
+            variant: Algorithm variant to use
+            serpentine: Whether to use serpentine scanning
+        """
+        self.variant = variant
+        self.serpentine = (serpentine == 'true')
+    
+    def get_current_parameters(self):
+        """Returns current parameter values."""
+        return {
+            'variant': self.variant,
+            'serpentine': 'true' if self.serpentine else 'false'
+        }
+    
+    def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
+               image_size: Tuple[int, int]) -> np.ndarray:
+        h, w = image_size
+        work_2d = pixels.reshape((h, w, 3)).astype(np.float32).copy()
+        tree = KDTree(palette_arr)
+        
+        for y in range(h):
+            # Serpentine scanning: alternate row direction
+            if self.serpentine and (y % 2 == 1):
+                x_range = range(w - 1, -1, -1)
+                x_direction = -1
+            else:
+                x_range = range(w)
+                x_direction = 1
+            
+            for x in x_range:
+                old_val = work_2d[y, x].copy()
+                
+                # Find nearest palette color
+                _, idx = tree.query(old_val, k=1)
+                chosen = palette_arr[idx]
+                work_2d[y, x] = chosen
+                
+                # Calculate error
+                err = old_val - chosen
+                
+                # Distribute error based on variant
+                if self.variant == 'floyd_steinberg':
+                    self._distribute_floyd_steinberg(work_2d, x, y, w, h, err, x_direction)
+                elif self.variant == 'jjn':
+                    self._distribute_jjn(work_2d, x, y, w, h, err, x_direction)
+                elif self.variant == 'stucki':
+                    self._distribute_stucki(work_2d, x, y, w, h, err, x_direction)
+                elif self.variant == 'burkes':
+                    self._distribute_burkes(work_2d, x, y, w, h, err, x_direction)
+                elif self.variant == 'atkinson':
+                    self._distribute_atkinson(work_2d, x, y, w, h, err, x_direction)
+                elif self.variant == 'sierra':
+                    self._distribute_sierra_full(work_2d, x, y, w, h, err, x_direction)
+                elif self.variant == 'sierra_two_row':
+                    self._distribute_sierra_two_row(work_2d, x, y, w, h, err, x_direction)
+                elif self.variant == 'sierra_lite':
+                    self._distribute_sierra_lite(work_2d, x, y, w, h, err, x_direction)
+        
+        np.clip(work_2d, 0, 255, out=work_2d)
+        return work_2d.reshape((-1, 3))
+    
+    def _distribute_floyd_steinberg(self, work_2d, x, y, w, h, err, x_direction):
+        """Floyd-Steinberg - 4 neighbors, divisor = 16"""
+        nx = x + x_direction
+        if 0 <= nx < w:
+            work_2d[y, nx] += err * (7.0 / 16.0)
+        
+        if y + 1 < h:
+            nx = x - x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (3.0 / 16.0)
+            
+            work_2d[y + 1, x] += err * (5.0 / 16.0)
+            
+            nx = x + x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (1.0 / 16.0)
+    
+    def _distribute_jjn(self, work_2d, x, y, w, h, err, x_direction):
+        """JJN - 12 neighbors, divisor = 48"""
+        nx = x + x_direction
+        if 0 <= nx < w:
+            work_2d[y, nx] += err * (7.0 / 48.0)
+        
+        nx = x + 2 * x_direction
+        if 0 <= nx < w:
+            work_2d[y, nx] += err * (5.0 / 48.0)
+        
+        if y + 1 < h:
+            nx = x - 2 * x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (3.0 / 48.0)
+            
+            nx = x - x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (5.0 / 48.0)
+            
+            work_2d[y + 1, x] += err * (7.0 / 48.0)
+            
+            nx = x + x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (5.0 / 48.0)
+            
+            nx = x + 2 * x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (3.0 / 48.0)
+        
+        if y + 2 < h:
+            nx = x - 2 * x_direction
+            if 0 <= nx < w:
+                work_2d[y + 2, nx] += err * (1.0 / 48.0)
+            
+            nx = x - x_direction
+            if 0 <= nx < w:
+                work_2d[y + 2, nx] += err * (3.0 / 48.0)
+            
+            work_2d[y + 2, x] += err * (5.0 / 48.0)
+            
+            nx = x + x_direction
+            if 0 <= nx < w:
+                work_2d[y + 2, nx] += err * (3.0 / 48.0)
+            
+            nx = x + 2 * x_direction
+            if 0 <= nx < w:
+                work_2d[y + 2, nx] += err * (1.0 / 48.0)
+    
+    def _distribute_stucki(self, work_2d, x, y, w, h, err, x_direction):
+        """Stucki - 12 neighbors, divisor = 42"""
+        nx = x + x_direction
+        if 0 <= nx < w:
+            work_2d[y, nx] += err * (8.0 / 42.0)
+        
+        nx = x + 2 * x_direction
+        if 0 <= nx < w:
+            work_2d[y, nx] += err * (4.0 / 42.0)
+        
+        if y + 1 < h:
+            nx = x - 2 * x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (2.0 / 42.0)
+            
+            nx = x - x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (4.0 / 42.0)
+            
+            work_2d[y + 1, x] += err * (8.0 / 42.0)
+            
+            nx = x + x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (4.0 / 42.0)
+            
+            nx = x + 2 * x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (2.0 / 42.0)
+        
+        if y + 2 < h:
+            nx = x - 2 * x_direction
+            if 0 <= nx < w:
+                work_2d[y + 2, nx] += err * (1.0 / 42.0)
+            
+            nx = x - x_direction
+            if 0 <= nx < w:
+                work_2d[y + 2, nx] += err * (2.0 / 42.0)
+            
+            work_2d[y + 2, x] += err * (4.0 / 42.0)
+            
+            nx = x + x_direction
+            if 0 <= nx < w:
+                work_2d[y + 2, nx] += err * (2.0 / 42.0)
+            
+            nx = x + 2 * x_direction
+            if 0 <= nx < w:
+                work_2d[y + 2, nx] += err * (1.0 / 42.0)
+    
+    def _distribute_burkes(self, work_2d, x, y, w, h, err, x_direction):
+        """Burkes - 7 neighbors, divisor = 32"""
+        nx = x + x_direction
+        if 0 <= nx < w:
+            work_2d[y, nx] += err * (8.0 / 32.0)
+        
+        nx = x + 2 * x_direction
+        if 0 <= nx < w:
+            work_2d[y, nx] += err * (4.0 / 32.0)
+        
+        if y + 1 < h:
+            nx = x - 2 * x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (2.0 / 32.0)
+            
+            nx = x - x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (4.0 / 32.0)
+            
+            work_2d[y + 1, x] += err * (8.0 / 32.0)
+            
+            nx = x + x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (4.0 / 32.0)
+            
+            nx = x + 2 * x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (2.0 / 32.0)
+    
+    def _distribute_atkinson(self, work_2d, x, y, w, h, err, x_direction):
+        """Atkinson - 6 neighbors, divisor = 8 (only 6/8 distributed)"""
+        nx = x + x_direction
+        if 0 <= nx < w:
+            work_2d[y, nx] += err * (1.0 / 8.0)
+        
+        nx = x + 2 * x_direction
+        if 0 <= nx < w:
+            work_2d[y, nx] += err * (1.0 / 8.0)
+        
+        if y + 1 < h:
+            nx = x - x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (1.0 / 8.0)
+            
+            work_2d[y + 1, x] += err * (1.0 / 8.0)
+            
+            nx = x + x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (1.0 / 8.0)
+        
+        if y + 2 < h:
+            work_2d[y + 2, x] += err * (1.0 / 8.0)
+    
+    def _distribute_sierra_full(self, work_2d, x, y, w, h, err, x_direction):
+        """Sierra (full) - 10 neighbors, divisor = 32"""
+        nx = x + x_direction
+        if 0 <= nx < w:
+            work_2d[y, nx] += err * (5.0 / 32.0)
+        
+        nx = x + 2 * x_direction
+        if 0 <= nx < w:
+            work_2d[y, nx] += err * (3.0 / 32.0)
+        
+        if y + 1 < h:
+            nx = x - 2 * x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (2.0 / 32.0)
+            
+            nx = x - x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (4.0 / 32.0)
+            
+            work_2d[y + 1, x] += err * (5.0 / 32.0)
+            
+            nx = x + x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (4.0 / 32.0)
+            
+            nx = x + 2 * x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (2.0 / 32.0)
+        
+        if y + 2 < h:
+            nx = x - x_direction
+            if 0 <= nx < w:
+                work_2d[y + 2, nx] += err * (2.0 / 32.0)
+            
+            work_2d[y + 2, x] += err * (3.0 / 32.0)
+            
+            nx = x + x_direction
+            if 0 <= nx < w:
+                work_2d[y + 2, nx] += err * (2.0 / 32.0)
+    
+    def _distribute_sierra_two_row(self, work_2d, x, y, w, h, err, x_direction):
+        """Two-Row Sierra - 8 neighbors, divisor = 16"""
+        nx = x + x_direction
+        if 0 <= nx < w:
+            work_2d[y, nx] += err * (4.0 / 16.0)
+        
+        nx = x + 2 * x_direction
+        if 0 <= nx < w:
+            work_2d[y, nx] += err * (3.0 / 16.0)
+        
+        if y + 1 < h:
+            nx = x - 2 * x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (1.0 / 16.0)
+            
+            nx = x - x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (2.0 / 16.0)
+            
+            work_2d[y + 1, x] += err * (3.0 / 16.0)
+            
+            nx = x + x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (2.0 / 16.0)
+            
+            nx = x + 2 * x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (1.0 / 16.0)
+    
+    def _distribute_sierra_lite(self, work_2d, x, y, w, h, err, x_direction):
+        """Sierra Lite - 4 neighbors, divisor = 4"""
+        nx = x + x_direction
+        if 0 <= nx < w:
+            work_2d[y, nx] += err * (2.0 / 4.0)
+        
+        if y + 1 < h:
+            nx = x - x_direction
+            if 0 <= nx < w:
+                work_2d[y + 1, nx] += err * (1.0 / 4.0)
+            
+            work_2d[y + 1, x] += err * (1.0 / 4.0)
 
 
 class PolkaDotDitherStrategy(BaseDitherStrategy):
@@ -2143,18 +2493,8 @@ class ImageDitherer:
             return AdaptiveVarianceDitherStrategy.get_parameter_info()
         elif mode == DitherMode.HYBRID:
             return HybridDitherStrategy.get_parameter_info()
-        elif mode == DitherMode.FLOYD_STEINBERG:
-            return FloydSteinbergDitherStrategy.get_parameter_info()
-        elif mode == DitherMode.JJN:
-            return JJNDitherStrategy.get_parameter_info()
-        elif mode == DitherMode.STUCKI:
-            return StuckiDitherStrategy.get_parameter_info()
-        elif mode == DitherMode.BURKES:
-            return BurkesDitherStrategy.get_parameter_info()
-        elif mode == DitherMode.ATKINSON:
-            return AtkinsonDitherStrategy.get_parameter_info()
-        elif mode == DitherMode.SIERRA:
-            return SierraDitherStrategy.get_parameter_info()
+        elif mode == DitherMode.ERROR_DIFFUSION:
+            return ErrorDiffusionDitherStrategy.get_parameter_info()
         elif mode == DitherMode.OSTROMOUKHOV:
             return OstromoukhovDitherStrategy.get_parameter_info()
         # Add other modes here as they become configurable
@@ -2186,42 +2526,12 @@ class ImageDitherer:
             settings = {key: info['default'] for key, info in params.items()}
             settings.update(self.dither_params)
             return PolkaDotDitherStrategy(**settings)
-        elif mode == DitherMode.FLOYD_STEINBERG:
-            # Floyd-Steinberg with configurable parameters
-            params = FloydSteinbergDitherStrategy.get_parameter_info()
+        elif mode == DitherMode.ERROR_DIFFUSION:
+            # Unified error diffusion with configurable variant and serpentine
+            params = ErrorDiffusionDitherStrategy.get_parameter_info()
             settings = {key: info['default'] for key, info in params.items()}
             settings.update(self.dither_params)
-            return FloydSteinbergDitherStrategy(**settings)
-        elif mode == DitherMode.JJN:
-            # JJN with configurable parameters
-            params = JJNDitherStrategy.get_parameter_info()
-            settings = {key: info['default'] for key, info in params.items()}
-            settings.update(self.dither_params)
-            return JJNDitherStrategy(**settings)
-        elif mode == DitherMode.STUCKI:
-            # Stucki with configurable parameters
-            params = StuckiDitherStrategy.get_parameter_info()
-            settings = {key: info['default'] for key, info in params.items()}
-            settings.update(self.dither_params)
-            return StuckiDitherStrategy(**settings)
-        elif mode == DitherMode.BURKES:
-            # Burkes with configurable parameters
-            params = BurkesDitherStrategy.get_parameter_info()
-            settings = {key: info['default'] for key, info in params.items()}
-            settings.update(self.dither_params)
-            return BurkesDitherStrategy(**settings)
-        elif mode == DitherMode.ATKINSON:
-            # Atkinson with configurable parameters
-            params = AtkinsonDitherStrategy.get_parameter_info()
-            settings = {key: info['default'] for key, info in params.items()}
-            settings.update(self.dither_params)
-            return AtkinsonDitherStrategy(**settings)
-        elif mode == DitherMode.SIERRA:
-            # Sierra with configurable parameters
-            params = SierraDitherStrategy.get_parameter_info()
-            settings = {key: info['default'] for key, info in params.items()}
-            settings.update(self.dither_params)
-            return SierraDitherStrategy(**settings)
+            return ErrorDiffusionDitherStrategy(**settings)
         elif mode == DitherMode.RIEMERSMA:
             return RiemersmaDitherStrategy()
         elif mode == DitherMode.WAVELET:

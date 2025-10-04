@@ -1,15 +1,20 @@
 # Dither Pie - Advanced Image & Video Dithering Tool
 
-A powerful Python-based GUI application for applying artistic dithering and pixelization effects to images and videos. Features intelligent caching, live previews, and professional-quality retro visual effects.
+A powerful Python-based application for applying artistic dithering and pixelization effects to images and videos. Features both intuitive GUI and powerful CLI modes with intelligent caching, live previews, and professional-quality retro visual effects.
 
 ---
 
 ## 🎯 Key Features
 
+### Dual Interface Modes
+- 🖥️ **GUI Mode**: Interactive interface with live preview and visual palette selection
+- 💻 **CLI Mode**: Batch processing with JSON configs, progress bars, and automation support
+
 ### Image & Video Processing
 - ✅ **Images**: PNG, JPG, JPEG, GIF, BMP support
 - ✅ **Videos**: MP4, AVI, MOV, MKV with audio preservation
-- ✅ **Random Frame Preview**: Test settings on any video frame
+- ✅ **Batch Processing**: Process entire folders with progress tracking
+- ✅ **Random Frame Preview**: Test settings on any video frame (GUI)
 - ✅ **Multi-core Processing**: Fast video rendering with multiprocessing
 
 ### Pixelization Methods
@@ -31,8 +36,8 @@ A powerful Python-based GUI application for applying artistic dithering and pixe
 
 ### Advanced Features
 - 🚀 **Smart Caching**: Re-dither without re-pixelizing, blue noise matrices cached in memory
-- 👁️ **Live Palette Preview**: See results in main window before applying
-- 🔄 **Toggle View During Preview**: Compare original with preview while selecting palette
+- 👁️ **Live Palette Preview**: See results in main window before applying (GUI)
+- 🔄 **Toggle View During Preview**: Compare original with preview while selecting palette (GUI)
 - ⚙️ **Configurable Algorithms**: Fine-tune parameters for 10+ dithering modes via settings dialog
 - 🌀 **Animated Status Bar**: Visual feedback with customizable spinner animations
 - 💾 **Persistent Settings**: Window position, defaults, and paths remembered
@@ -115,7 +120,7 @@ A powerful Python-based GUI application for applying artistic dithering and pixe
 
 ### Required Packages
 ```bash
-pip install pillow numpy scikit-learn customtkinter opencv-python pywavelets torch torchvision
+pip install pillow numpy scikit-learn customtkinter opencv-python pywavelets torch torchvision scipy rich
 ```
 
 ### Neural Models (Optional)
@@ -131,38 +136,78 @@ Place in project root:
 
 ## 📖 Quick Start Guide
 
-### Basic Workflow
+### Launching the Application
+
+**GUI Mode (no arguments):**
+```bash
+python dither_pie.py
+```
+
+**CLI Mode (with config file):**
+```bash
+python dither_pie.py config.json
+```
+
+**CLI Mode (with input override):**
+```bash
+python dither_pie.py config.json input_image.png
+```
+
+### GUI Basic Workflow
 1. **Load Image/Video** → Click "Load Image" or "Load Video"
 2. **Pixelize** (optional) → Choose Regular or Neural, set max size
 3. **Apply Dithering** → Select palette and see live preview
 4. **Save Result** → Export as PNG or process full video
 
+### CLI Basic Workflow
+1. **Create config** → Generate example: `python dither_pie.py --example-config`
+2. **Edit settings** → Modify JSON with your parameters
+3. **Process** → Run: `python dither_pie.py your_config.json`
+4. **Batch process** → Point input to folder for batch processing
+
 ### Example Workflows
 
-#### Classic Pixel Art Effect
+#### Classic Pixel Art Effect (GUI)
 ```
 1. Load Image
 2. Pixelize (Regular) - Max Size: 64
-3. Apply Dithering - Bayer (4x4), 16 colors
-4. Enable "Final resize"
-5. Save Result
+3. Apply Dithering - Select Bayer mode, 16 colors
+4. Choose palette in dialog (live preview in main window)
+5. Enable "Upscale by integer multiple" (2x-4x)
+6. Apply Selected → Save Result
 ```
 
-#### High-Quality Retro Effect
+#### High-Quality Retro Effect (GUI)
 ```
 1. Load Image
 2. Pixelize (Neural) - Max Size: 128
-3. Apply Dithering - Blue Noise, 32 colors, Gamma Correction ON
-4. Try different palettes in live preview
-5. Apply Selected → Save
+3. Apply Dithering - Select Blue Noise mode, 32 colors
+4. In palette dialog: Enable Gamma Correction
+5. Try different palettes (preview updates instantly)
+6. Compare with Toggle View button
+7. Apply Selected → Save
 ```
 
-#### Dithering Only (No Pixelization)
+#### Dithering Only (No Pixelization) (GUI)
 ```
 1. Load Image
 2. Skip pixelization step
-3. Apply Dithering - Hybrid mode, extract palette from another image
-4. Save Result (preserves full resolution)
+3. Apply Dithering - Select Hybrid mode
+4. Choose "From Image" to extract palette from reference
+5. Save Result (preserves full resolution)
+```
+
+#### Batch Processing (CLI)
+```bash
+# Create config
+python dither_pie.py --example-config > my_settings.json
+
+# Edit settings in my_settings.json
+# Set desired dithering mode, colors, etc.
+
+# Process folder
+python dither_pie.py my_settings.json my_photos/
+# Creates my_photos_processed/ with all results
 ```
 
 ---
@@ -205,10 +250,124 @@ This allows you to:
 
 ---
 
+## 💻 CLI Mode - Command Line Interface
 
-## 🎛️ Configuration System
+Dither Pie includes a powerful CLI for automation, batch processing, and scripting workflows.
 
-User preferences automatically saved to `config.json`:
+### CLI Features
+- 📁 **Batch Processing**: Process entire folders automatically
+- 📊 **Progress Tracking**: Rich progress bars and status updates
+- 🔧 **JSON Configuration**: Reusable config files for consistent results
+- 🎨 **Full Feature Access**: All GUI features available via CLI
+- 📝 **Verbose Logging**: Optional detailed output and log files
+- ⚡ **Smart Filename Generation**: Auto-generates descriptive output names
+- 🔄 **Input Override**: Apply same settings to different files easily
+
+### Basic Usage
+
+```bash
+# Show help and available options
+python dither_pie.py --help
+
+# Generate example configuration file
+python dither_pie.py --example-config > my_config.json
+
+# Process with config file
+python dither_pie.py my_config.json
+
+# Process specific file with config settings (auto-generates output name)
+python dither_pie.py config.json input_image.png
+
+# Process entire folder (creates processed folder)
+python dither_pie.py config.json input_folder/
+
+# Verbose output with log file
+python dither_pie.py -v --log-file processing.log config.json
+```
+
+### Example Configuration
+
+```json
+{
+    "input": "path/to/input.png",
+    "output": "path/to/output.png",
+    "pixelization": {
+        "enabled": true,
+        "method": "regular",
+        "max_size": 128
+    },
+    "dithering": {
+        "enabled": true,
+        "mode": "bayer",
+        "parameters": {}
+    },
+    "palette": {
+        "source": "median_cut",
+        "num_colors": 16,
+        "use_gamma": false
+    },
+    "final_resize": {
+        "enabled": false,
+        "multiplier": 2
+    }
+}
+```
+
+### Palette Sources
+
+- `"median_cut"` - Classic color quantization
+- `"kmeans"` - ML-based clustering
+- `"uniform"` - Evenly distributed color space
+- `"file:path.png"` - Extract from another image
+- `"gameboy_dmg"` - Palette name from `palette.json`
+- Any custom palette name saved in GUI
+
+### Command Line Options
+
+| Option | Description |
+|--------|-------------|
+| `--help`, `-h` | Show help message |
+| `--example-config` | Generate example configuration |
+| `--verbose`, `-v` | Enable verbose (DEBUG) logging |
+| `--quiet`, `-q` | Quiet mode (errors only) |
+| `--log-file FILE` | Write log to file |
+
+### Batch Processing Example
+
+```bash
+# 1. Create a config for your desired settings
+python dither_pie.py --example-config > batch_settings.json
+
+# 2. Edit batch_settings.json with your preferred dithering settings
+
+# 3. Process entire folder
+python dither_pie.py batch_settings.json my_images/
+# Output: my_images_processed/ folder created with all processed files
+
+# 4. Review results with summary statistics
+```
+
+**For detailed CLI documentation, see `CLI_USAGE.md`**
+
+### Example Configuration Files
+
+The `examples/` folder contains ready-to-use configuration files:
+
+- `image_basic.json` - Basic image dithering (median cut palette)
+- `image_pixelized.json` - Regular pixelization + dithering
+- `image_neural.json` - Neural pixelization + dithering
+- `image_custom_palette.json` - Using custom palettes from palette.json
+- `video_basic.json` - Video processing example
+- `batch_folder.json` - Batch folder processing setup
+- `settings_override.json` - Example of settings override pattern
+
+Copy and modify these for your needs!
+
+---
+
+## 🎛️ Configuration System (GUI)
+
+User preferences automatically saved to `config.json` when using GUI mode:
 
 ```json
 {
@@ -296,13 +455,21 @@ Many dithering modes include adjustable parameters accessible via the **⚙️ s
 - ✅ Try **Blue Noise**, **Error Diffusion (Atkinson)**, or **Hybrid** for smooth gradients
 - ✅ Use **Halftone** for authentic newspaper/magazine printing effects
 - ✅ Use **Riemersma** or **Error Diffusion (Floyd-Steinberg)** for detailed line art
-- ✅ Adjust algorithm parameters via ⚙️ settings button for fine control
+- ✅ Adjust algorithm parameters via ⚙️ settings button for fine control (GUI) or JSON config (CLI)
 
 ### Performance Tips
-- ✅ Test on random frames before processing full video
+- ✅ Test on random frames before processing full video (GUI)
+- ✅ Test on single file before batch processing (CLI)
 - ✅ Use lower max_size for faster neural processing
 - ✅ Regular pixelization is 50-100x faster than neural
-- ✅ Preview different palettes without re-pixelizing (uses cache)
+- ✅ Preview different palettes without re-pixelizing (uses cache in GUI)
+- ✅ Use CLI batch mode for processing large folders (pre-loads neural models once)
+
+### Workflow Tips
+- ✅ **GUI for experimentation**: Live preview helps find perfect settings
+- ✅ **CLI for production**: Use settings from GUI experiments in JSON configs
+- ✅ **Batch processing**: Test settings on one file, then apply to folder via CLI
+- ✅ **Save configurations**: Create reusable JSON configs for different styles
 
 ### Common Use Cases
 - **Print/Halftone Effects**: Halftone mode (no pixelization), adjust screen angle and dot size
@@ -311,6 +478,7 @@ Many dithering modes include adjustable parameters accessible via the **⚙️ s
 - **Artistic Effects**: Neural + Blue Noise or Error Diffusion (JJN), 32-64 colors, gamma on
 - **Newspaper Style**: Halftone mode with 6-8 colors, angle 45°, gamma on
 - **Web Optimization**: Dither + resize for smaller file sizes with preserved detail
+- **Batch Photo Processing**: Use CLI with JSON config for consistent results across many files
 
 ---
 
@@ -318,37 +486,47 @@ Many dithering modes include adjustable parameters accessible via the **⚙️ s
 
 ### Architecture
 ```
-dither_pie.py          → Main GUI (customtkinter) with live preview system
+dither_pie.py          → Entry point (routes to GUI or CLI based on arguments)
+dither_pie_gui.py      → Main GUI (customtkinter) with live preview system
+dither_cli.py          → CLI interface with Rich terminal output
 dithering_lib.py       → 12 dithering algorithms with configurable parameters
 video_processor.py     → Multi-core video processing with FFmpeg
 config_manager.py      → Persistent configuration with JSON storage
-gui_components.py      → Reusable UI widgets (settings dialog, animated status bar)
-utils.py              → Palette management (generation, import, extraction)
-models/               → Neural pixelization models (PyTorch)
-spinners.json         → Animated spinner definitions for status bar
+gui_components.py      → Reusable UI widgets (settings dialog, animated status bar, zoomable image)
+utils.py               → Palette management (generation, import, extraction)
+models/                → Neural pixelization models (PyTorch)
+spinners.json          → Animated spinner definitions for status bar
+examples/              → Example configuration files for CLI
 ```
 
 ### Dependencies
 - **GUI**: customtkinter, tkinter
+- **CLI**: rich (terminal output, progress bars, logging)
 - **Image**: Pillow, numpy
 - **ML**: PyTorch, scikit-learn
 - **Video**: FFmpeg (subprocess), opencv-python
 - **Math**: scipy, pywavelets
 
 ### Technical Highlights
+- **Dual Interface Architecture**: Single entry point routes to GUI or CLI based on arguments
 - **Strategy Pattern**: Each dithering algorithm is a separate strategy class
 - **Metadata-Driven UI**: Parameter dialogs generated from algorithm metadata (`get_parameter_info()`)
-- **Separation of Concerns**: GUI and core algorithms are fully decoupled
+- **Separation of Concerns**: GUI, CLI, and core algorithms are fully decoupled
 - **Smart Caching**: Multi-level caching (pixelization, preview, blue noise matrices)
-- **Live Preview System**: Non-blocking preview generation with threading
+- **Live Preview System**: Non-blocking preview generation with threading (GUI)
+- **Rich Terminal Output**: Beautiful CLI with progress bars, spinners, and colored logging
+- **Config Validation**: Comprehensive JSON schema validation with helpful error messages
 - **Animated Feedback**: Status bar with configurable spinner animations from `spinners.json`
 - **State Management**: Palette dialog state tracking for toggle view functionality
 
 ### Key Design Decisions
+- **Single Entry Point**: `dither_pie.py` routes to GUI (no args) or CLI (with args)
+- **Shared Core Library**: Both GUI and CLI use identical dithering algorithms
 - **No Parameter Persistence Across Modes**: Each algorithm starts with defaults when selected
 - **Preview Cache by Settings**: Cache key includes palette, gamma, dither mode, and all parameters
 - **In-Memory Blue Noise**: Generated matrices cached during session, not persisted
 - **Serpentine Off by Default**: Cleaner look for most use cases, easily toggled in settings
+- **Path Resolution**: CLI config paths resolved relative to config file location
 
 ### Credits
 Neural pixelization models from:
@@ -360,6 +538,11 @@ Neural pixelization models from:
 ## 📝 Changelog
 
 ### Latest Features
+- ✨ **CLI Mode**: Full command-line interface with batch processing and automation support
+- ✨ **Batch Folder Processing**: Process entire directories with progress tracking
+- ✨ **Rich Terminal Output**: Beautiful CLI with progress bars, spinners, and colored logging
+- ✨ **JSON Configuration**: Reusable config files for consistent processing
+- ✨ **Input Override**: Apply same settings to different files easily
 - ✨ **Configurable Dithering Algorithms**: Settings dialog (⚙️) for fine-tuning 10+ modes
 - ✨ **Consolidated Algorithms**: Bayer sizes and Error Diffusion variants in single modes
 - ✨ **Toggle View During Preview**: Compare original with dithered preview in real-time
@@ -371,10 +554,10 @@ Neural pixelization models from:
 - ✨ **Persistent User Preferences**: All settings saved to config.json
 
 ### Coming Soon
-- 🔜 Batch image processing
-- 🔜 Preset management (save/load settings)
+- 🔜 Preset management (save/load settings in GUI)
 - 🔜 Export palette from result
 - 🔜 Undo/redo system
+- 🔜 Drag-and-drop file loading
 
 ---
 

@@ -992,11 +992,8 @@ def generate_example_config():
     }
     
     import json
-    example_json = json.dumps(example, indent=4)
-    
-    console.print("\n[bold cyan]Example Configuration:[/]\n")
-    console.print(Panel(example_json, title="config.json", border_style="cyan"))
-    console.print("\n[dim]Save this to a .json file and modify as needed.[/]\n")
+    # Print clean JSON for piping/redirection
+    print(json.dumps(example, indent=4))
 
 
 def main():
@@ -1024,7 +1021,7 @@ def main():
         sys.exit(0)
     
     if args.example_config:
-        show_banner()
+        # Don't show banner for example config - output should be clean JSON
         generate_example_config()
         sys.exit(0)
     

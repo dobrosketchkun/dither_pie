@@ -80,6 +80,10 @@ class DitheringApp(ctk.CTk):
         self.display_state = "current"  # Track what we're showing: "current", "pixelized", "dithered"
         self.original_size = None  # Store original image/video size (width, height)
         
+        # Palette dialog state
+        self.palette_dialog_open = False  # Track if palette dialog is open
+        self.on_dither_mode_changed_callback = None  # Callback for dither mode changes during palette preview
+        
         # Pixelization cache tracking
         self.pixelization_cache = {
             "method": None,      # "regular" or "neural"
@@ -332,7 +336,8 @@ class DitheringApp(ctk.CTk):
         self.dither_dropdown = ctk.CTkOptionMenu(
             self.sidebar,
             variable=self.dither_mode,
-            values=dither_modes
+            values=dither_modes,
+            command=self._on_dither_mode_changed
         )
         self.dither_dropdown.grid(row=row, column=0, pady=2, padx=10, sticky='ew')
         row += 1
@@ -422,11 +427,11 @@ class DitheringApp(ctk.CTk):
         self.apply_video_button.configure(state="disabled")
         self.btn_save.configure(state="disabled")
         self.btn_toggle.configure(state="disabled")
-        # Keep btn_fit enabled so user can fit preview to window while choosing palette
+        # Keep btn_fit and dither_dropdown enabled so user can fit preview and change dither mode while choosing palette
         self.max_size_entry.configure(state="disabled")
         self.colors_entry.configure(state="disabled")
         self.resize_multiplier_entry.configure(state="disabled")
-        self.dither_dropdown.configure(state="disabled")
+        # self.dither_dropdown stays enabled for live preview
     
     def _enable_controls(self):
         """Re-enable all control buttons and inputs after palette selection."""
@@ -443,7 +448,15 @@ class DitheringApp(ctk.CTk):
         self.max_size_entry.configure(state="normal")
         self.colors_entry.configure(state="normal")
         self.resize_multiplier_entry.configure(state="normal")
-        self.dither_dropdown.configure(state="normal")
+        # self.dither_dropdown already enabled
+    
+    def _on_dither_mode_changed(self, selected_value):
+        """
+        Callback when dither mode dropdown is changed.
+        If palette dialog is open, trigger preview regeneration.
+        """
+        if self.palette_dialog_open and self.on_dither_mode_changed_callback:
+            self.on_dither_mode_changed_callback()
     
     def load_image(self):
         """Load an image file."""
@@ -731,6 +744,9 @@ class DitheringApp(ctk.CTk):
         # Instead, disable all control buttons to prevent unintended interactions
         self._disable_controls()
         
+        # Mark palette dialog as open
+        self.palette_dialog_open = True
+        
         selected_palette = [None]  # Use list to allow modification in nested function
         
         # Store original display state to restore on cancel
@@ -811,13 +827,26 @@ class DitheringApp(ctk.CTk):
                     daemon=True
                 ).start()
         
+        def on_dither_mode_changed_internal():
+            """Regenerate preview when dither mode dropdown is changed."""
+            # Cache is fine - dither mode is part of cache key
+            # Just regenerate current preview if one is selected
+            if current_palette_name[0] and current_palette_data[0]:
+                threading.Thread(
+                    target=lambda: generate_preview(current_palette_name[0], current_palette_data[0]),
+                    daemon=True
+                ).start()
+        
+        # Connect dither mode change callback
+        self.on_dither_mode_changed_callback = on_dither_mode_changed_internal
+        
         def generate_preview(palette_name, palette):
             """Generate preview and display in MAIN viewer window."""
             if is_generating[0]:
                 return  # Skip if already generating
             
-            # Create cache key that includes gamma state
-            cache_key = f"{palette_name}_gamma{gamma_var.get()}"
+            # Create cache key that includes gamma state and dither mode
+            cache_key = f"{palette_name}_gamma{gamma_var.get()}_dither{self.dither_mode.get()}"
             
             # Check cache first
             if cache_key in preview_cache:
@@ -1027,13 +1056,18 @@ class DitheringApp(ctk.CTk):
             
             # The preview is already showing in the main window
             # If it's cached, use that, otherwise it will be generated below
-            cache_key = f"{sel_name}_gamma{gamma_var.get()}"
+            cache_key = f"{sel_name}_gamma{gamma_var.get()}_dither{self.dither_mode.get()}"
             if cache_key in preview_cache:
                 self.dithered_image = preview_cache[cache_key]
                 self.display_state = "dithered"
             
             # Re-enable controls before closing
             self._enable_controls()
+            
+            # Reset palette dialog state
+            self.palette_dialog_open = False
+            self.on_dither_mode_changed_callback = None
+            
             self._update_resize_preview()
             dialog.destroy()
         
@@ -1049,6 +1083,11 @@ class DitheringApp(ctk.CTk):
             
             # Re-enable controls before closing
             self._enable_controls()
+            
+            # Reset palette dialog state
+            self.palette_dialog_open = False
+            self.on_dither_mode_changed_callback = None
+            
             dialog.destroy()
         
         # Handle window close (X button) same as Cancel

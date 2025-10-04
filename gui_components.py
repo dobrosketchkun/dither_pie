@@ -278,8 +278,9 @@ class ColorPickerGrid(ctk.CTkFrame):
 class StatusBar(ctk.CTkFrame):
     """
     Status bar to show information at the bottom of the window.
+    Supports animated spinners for processing states.
     """
-    def __init__(self, master, **kwargs):
+    def __init__(self, master, spinner_name: str = "dots", **kwargs):
         super().__init__(master, height=30, **kwargs)
         
         self.label = ctk.CTkLabel(
@@ -288,11 +289,87 @@ class StatusBar(ctk.CTkFrame):
             anchor="w"
         )
         self.label.pack(side="left", padx=10, fill="x", expand=True)
+        
+        # Spinner state
+        self.spinner_active = False
+        self.spinner_frames = []
+        self.spinner_interval = 80
+        self.spinner_index = 0
+        self.spinner_message = ""
+        self.spinner_after_id = None
+        
+        # Load spinner configuration
+        self._load_spinner(spinner_name)
     
-    def set_status(self, message: str):
-        """Update status message."""
-        self.label.configure(text=message)
+    def _load_spinner(self, spinner_name: str):
+        """Load spinner configuration from spinners.json."""
+        try:
+            import json
+            from pathlib import Path
+            
+            # Look for spinners.json in the same directory as this file
+            spinner_file = Path(__file__).parent / "spinners.json"
+            if spinner_file.exists():
+                with open(spinner_file, 'r', encoding='utf-8') as f:
+                    spinners = json.load(f)
+                    if spinner_name in spinners:
+                        spinner_config = spinners[spinner_name]
+                        self.spinner_frames = spinner_config.get('frames', ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'])
+                        self.spinner_interval = spinner_config.get('interval', 80)
+                    else:
+                        # Default fallback
+                        self.spinner_frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+                        self.spinner_interval = 80
+            else:
+                # Default fallback if file not found
+                self.spinner_frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+                self.spinner_interval = 80
+        except Exception as e:
+            print(f"Error loading spinner: {e}")
+            # Simple fallback
+            self.spinner_frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+            self.spinner_interval = 80
+    
+    def set_status(self, message: str, spinning: bool = False):
+        """
+        Update status message.
+        
+        Args:
+            message: The status message to display
+            spinning: If True, starts animated spinner. If False, stops any active spinner.
+        """
+        if spinning:
+            self.start_spinner(message)
+        else:
+            self.stop_spinner()
+            self.label.configure(text=message)
+            self.update()
+    
+    def start_spinner(self, message: str):
+        """Start the animated spinner with the given message."""
+        self.spinner_message = message
+        self.spinner_active = True
+        self.spinner_index = 0
+        self._animate_spinner()
+    
+    def stop_spinner(self):
+        """Stop the animated spinner."""
+        self.spinner_active = False
+        if self.spinner_after_id is not None:
+            self.after_cancel(self.spinner_after_id)
+            self.spinner_after_id = None
+    
+    def _animate_spinner(self):
+        """Internal method to animate the spinner."""
+        if not self.spinner_active:
+            return
+        
+        frame = self.spinner_frames[self.spinner_index]
+        self.label.configure(text=f"{frame} {self.spinner_message}")
         self.update()
+        
+        self.spinner_index = (self.spinner_index + 1) % len(self.spinner_frames)
+        self.spinner_after_id = self.after(self.spinner_interval, self._animate_spinner)
 
 
 class ImageComparisonView(ctk.CTkFrame):

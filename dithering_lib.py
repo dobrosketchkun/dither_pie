@@ -331,9 +331,40 @@ class WaveletDitherStrategy(BaseDitherStrategy):
     A multi-scale approach that does wavelet decomposition, subband quantization,
     then inverse wavelet, and finally a 2-color nearest selection from the palette.
     """
-    def __init__(self, wavelet:str='haar', subband_quant:int=8):
+    
+    @staticmethod
+    def get_parameter_info():
+        """
+        Returns metadata about configurable parameters for this dithering mode.
+        """
+        return {
+            'wavelet': {
+                'type': 'choice',
+                'default': 'haar',
+                'choices': ['haar', 'db1', 'db2', 'db4', 'sym2', 'sym4', 'coif1', 'bior1.3', 'bior2.2'],
+                'label': 'Wavelet Type',
+                'description': 'Type of wavelet basis function (haar = simplest, db = Daubechies, sym = Symlets)'
+            },
+            'subband_quant': {
+                'type': 'int',
+                'default': 8,
+                'min': 2,
+                'max': 32,
+                'label': 'Subband Quantization',
+                'description': 'Number of quantization levels for wavelet subbands (higher = smoother)'
+            }
+        }
+    
+    def __init__(self, wavelet: str = 'haar', subband_quant: int = 8):
         self.wavelet = wavelet
         self.subband_quant = subband_quant
+    
+    def get_current_parameters(self):
+        """Returns current parameter values."""
+        return {
+            'wavelet': self.wavelet,
+            'subband_quant': self.subband_quant
+        }
 
     def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
                image_size: Tuple[int,int]) -> np.ndarray:
@@ -396,9 +427,42 @@ class AdaptiveVarianceDitherStrategy(BaseDitherStrategy):
       - If the local variance is below a threshold => skip error diffusion (just pick nearest color).
       - If it's above the threshold => do a small Floyd–Steinberg distribution to neighbors.
     """
+    
+    @staticmethod
+    def get_parameter_info():
+        """
+        Returns metadata about configurable parameters for this dithering mode.
+        """
+        return {
+            'var_threshold': {
+                'type': 'float',
+                'default': 300.0,
+                'min': 0.0,
+                'max': 1000.0,
+                'step': 10.0,
+                'label': 'Variance Threshold',
+                'description': 'Threshold for local variance to trigger error diffusion (higher = less diffusion)'
+            },
+            'window_radius': {
+                'type': 'int',
+                'default': 1,
+                'min': 1,
+                'max': 5,
+                'label': 'Window Radius',
+                'description': 'Radius of window for computing local variance (larger = smoother adaptation)'
+            }
+        }
+    
     def __init__(self, var_threshold: float = 300.0, window_radius: int = 1):
         self.var_threshold = var_threshold
         self.window_radius = window_radius
+    
+    def get_current_parameters(self):
+        """Returns current parameter values."""
+        return {
+            'var_threshold': self.var_threshold,
+            'window_radius': self.window_radius
+        }
 
     def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
                image_size: Tuple[int,int]) -> np.ndarray:
@@ -514,8 +578,34 @@ class HybridDitherStrategy(BaseDitherStrategy):
       4) final error = lum_factor*err_lum + col_factor*err_col
       5) distribute final error to neighbors
     """
+    
+    @staticmethod
+    def get_parameter_info():
+        """
+        Returns metadata about configurable parameters for this dithering mode.
+        """
+        return {
+            'lum_factor': {
+                'type': 'float',
+                'default': 1.0,
+                'min': 0.0,
+                'max': 2.0,
+                'step': 0.1,
+                'label': 'Luminance Factor',
+                'description': 'Strength of luminance error diffusion (1.0 = full, 0.0 = none)'
+            },
+            'col_factor': {
+                'type': 'float',
+                'default': 0.2,
+                'min': 0.0,
+                'max': 2.0,
+                'step': 0.1,
+                'label': 'Color Factor',
+                'description': 'Strength of color error diffusion (lower = less color noise)'
+            }
+        }
 
-    def __init__(self, lum_factor: float=1.0, col_factor: float=0.2):
+    def __init__(self, lum_factor: float = 1.0, col_factor: float = 0.2):
         """
         lum_factor: how strongly to diffuse the luminance portion
         col_factor: how strongly to diffuse the color portion
@@ -526,6 +616,13 @@ class HybridDitherStrategy(BaseDitherStrategy):
         self.col_factor = col_factor
         # We'll use standard Floyd–Steinberg offsets & weights
         self.fs_offsets = [(1,0,7/16), ( -1,1,3/16 ), (0,1,5/16), (1,1,1/16)]
+    
+    def get_current_parameters(self):
+        """Returns current parameter values."""
+        return {
+            'lum_factor': self.lum_factor,
+            'col_factor': self.col_factor
+        }
 
     def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
                image_size: Tuple[int,int]) -> np.ndarray:
@@ -1052,6 +1149,12 @@ class ImageDitherer:
             return PolkaDotDitherStrategy.get_parameter_info()
         elif mode == DitherMode.BLUE_NOISE:
             return BlueNoiseDitherStrategy.get_parameter_info()
+        elif mode == DitherMode.WAVELET:
+            return WaveletDitherStrategy.get_parameter_info()
+        elif mode == DitherMode.ADAPTIVE_VARIANCE:
+            return AdaptiveVarianceDitherStrategy.get_parameter_info()
+        elif mode == DitherMode.HYBRID:
+            return HybridDitherStrategy.get_parameter_info()
         # Add other modes here as they become configurable
         return None
     
@@ -1086,14 +1189,25 @@ class ImageDitherer:
         elif mode == DitherMode.RIEMERSMA:
             return RiemersmaDitherStrategy()
         elif mode == DitherMode.WAVELET:
-            return WaveletDitherStrategy(wavelet='haar', subband_quant=8)
+            # Wavelet with configurable parameters
+            params = WaveletDitherStrategy.get_parameter_info()
+            settings = {key: info['default'] for key, info in params.items()}
+            settings.update(self.dither_params)
+            return WaveletDitherStrategy(**settings)
         elif mode == DitherMode.ADAPTIVE_VARIANCE:
-            return AdaptiveVarianceDitherStrategy(var_threshold=300.0, window_radius=1)
+            # Adaptive variance with configurable parameters
+            params = AdaptiveVarianceDitherStrategy.get_parameter_info()
+            settings = {key: info['default'] for key, info in params.items()}
+            settings.update(self.dither_params)
+            return AdaptiveVarianceDitherStrategy(**settings)
         elif mode == DitherMode.PERCEPTUAL:
             return PerceptualDitherStrategy()
         elif mode == DitherMode.HYBRID:
-            # Example: fully diffuse luminance, 20% color
-            return HybridDitherStrategy(lum_factor=1.0, col_factor=0.2)
+            # Hybrid with configurable parameters
+            params = HybridDitherStrategy.get_parameter_info()
+            settings = {key: info['default'] for key, info in params.items()}
+            settings.update(self.dither_params)
+            return HybridDitherStrategy(**settings)
         elif mode == DitherMode.HALFTONE:
             # Newspaper-style halftone with configurable parameters
             # Get defaults and override with user settings

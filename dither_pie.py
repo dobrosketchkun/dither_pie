@@ -436,7 +436,8 @@ class DitheringApp(ctk.CTk):
     
     def _create_status_bar(self):
         """Create status bar at bottom."""
-        self.status_bar = StatusBar(self)
+        spinner_name = self.config.get("ui", "spinner_name", default="dots")
+        self.status_bar = StatusBar(self, spinner_name=spinner_name)
         self.status_bar.grid(row=1, column=0, columnspan=2, sticky='ew', padx=10, pady=(0, 10))
     
     def _disable_controls(self):
@@ -703,7 +704,7 @@ class DitheringApp(ctk.CTk):
             self.fit_to_window()
             return
         
-        self.status_bar.set_status("Pixelizing...")
+        self.status_bar.set_status("Pixelizing...", spinning=True)
         
         # Use threading to prevent GUI freeze
         def process():
@@ -718,7 +719,7 @@ class DitheringApp(ctk.CTk):
             # Update GUI from main thread
             self.after(0, lambda: self.image_viewer.set_image(self.pixelized_image, update=False))
             self.after(0, lambda: self.fit_to_window())
-            self.after(0, lambda: self.status_bar.set_status("Pixelization complete"))
+            self.after(0, lambda: self.status_bar.set_status("Pixelization complete", spinning=False))
             self.after(0, lambda: self._update_resize_preview())
         
         threading.Thread(target=process, daemon=True).start()
@@ -747,7 +748,7 @@ class DitheringApp(ctk.CTk):
             self.fit_to_window()
             return
         
-        self.status_bar.set_status("Neural pixelizing (this may take a moment)...")
+        self.status_bar.set_status("Neural pixelizing (this may take a moment)...", spinning=True)
         
         def process():
             if self.neural_pix is None:
@@ -763,7 +764,7 @@ class DitheringApp(ctk.CTk):
             
             self.after(0, lambda: self.image_viewer.set_image(self.pixelized_image, update=False))
             self.after(0, lambda: self.fit_to_window())
-            self.after(0, lambda: self.status_bar.set_status("Neural pixelization complete"))
+            self.after(0, lambda: self.status_bar.set_status("Neural pixelization complete", spinning=False))
             self.after(0, lambda: self._update_resize_preview())
         
         threading.Thread(target=process, daemon=True).start()
@@ -934,7 +935,7 @@ class DitheringApp(ctk.CTk):
                 return
             
             is_generating[0] = True
-            self.after(0, lambda: self.status_bar.set_status(f"Generating preview: {palette_name}..."))
+            self.after(0, lambda: self.status_bar.set_status(f"Generating preview: {palette_name}...", spinning=True))
             
             try:
                 # Store current palette info for gamma refresh
@@ -970,11 +971,11 @@ class DitheringApp(ctk.CTk):
                 # Display in MAIN viewer
                 self.after(0, lambda: display_preview(preview_result))
                 gamma_text = " (gamma)" if gamma_var.get() else ""
-                self.after(0, lambda: self.status_bar.set_status(f"Preview: {palette_name}{gamma_text}"))
+                self.after(0, lambda: self.status_bar.set_status(f"Preview: {palette_name}{gamma_text}", spinning=False))
                 
             except Exception as e:
                 print(f"Preview generation error: {e}")
-                self.after(0, lambda: self.status_bar.set_status(f"Preview error: {str(e)[:50]}"))
+                self.after(0, lambda: self.status_bar.set_status(f"Preview error: {str(e)[:50]}", spinning=False))
             finally:
                 is_generating[0] = False
         
@@ -1208,7 +1209,7 @@ class DitheringApp(ctk.CTk):
             except:
                 dither_mode = DitherMode.BAYER4x4
             
-            self.status_bar.set_status("Applying final dithering...")
+            self.status_bar.set_status("Applying final dithering...", spinning=True)
             
             def process():
                 # Get custom parameters for this mode
@@ -1231,12 +1232,12 @@ class DitheringApp(ctk.CTk):
                 
                 self.after(0, lambda: self.image_viewer.set_image(self.dithered_image, update=False))
                 self.after(0, lambda: self.fit_to_window())
-                self.after(0, lambda: self.status_bar.set_status("Dithering complete"))
+                self.after(0, lambda: self.status_bar.set_status("Dithering complete", spinning=False))
             
             threading.Thread(target=process, daemon=True).start()
         else:
             # We have the cached result, just update status
-            self.status_bar.set_status("Dithering applied from preview")
+            self.status_bar.set_status("Dithering applied from preview", spinning=False)
     
     def _apply_to_video_workflow(self):
         """Handle the full video processing workflow - shows save dialog and processes."""
@@ -1279,7 +1280,7 @@ class DitheringApp(ctk.CTk):
             messagebox.showerror("Invalid Input", "Please check your input values.")
             return
         
-        self.status_bar.set_status("Processing video (check console for progress)...")
+        self.status_bar.set_status("Processing video (check console for progress)...", spinning=True)
         
         def process():
             # Get custom parameters for this mode
@@ -1325,13 +1326,13 @@ class DitheringApp(ctk.CTk):
             
             # Show result
             if success:
-                self.after(0, lambda: self.status_bar.set_status("Video processing complete!"))
+                self.after(0, lambda: self.status_bar.set_status("Video processing complete!", spinning=False))
                 self.after(0, lambda: messagebox.showinfo(
                     "Success",
                     f"Video processed successfully:\n{output_path}"
                 ))
             else:
-                self.after(0, lambda: self.status_bar.set_status("Video processing failed"))
+                self.after(0, lambda: self.status_bar.set_status("Video processing failed", spinning=False))
                 self.after(0, lambda: messagebox.showerror(
                     "Error",
                     "Video processing failed. Check console for details."
@@ -1341,9 +1342,9 @@ class DitheringApp(ctk.CTk):
     
     def _on_video_progress(self, fraction: float, message: str):
         """Callback for video processing progress."""
-        # Update status bar from main thread
+        # Update status bar from main thread with spinner still running
         progress_msg = f"{int(fraction * 100)}% - {message}"
-        self.after(0, lambda: self.status_bar.set_status(progress_msg))
+        self.after(0, lambda: self.status_bar.set_status(progress_msg, spinning=True))
         # Also print to console
         print(f"Progress: {int(fraction * 100)}% - {message}")
     

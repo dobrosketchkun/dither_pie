@@ -22,6 +22,7 @@ class DitherMode(Enum):
     BAYER4x4 = "bayer4x4"
     BAYER8x8 = "bayer8x8"
     BAYER16x16 = "bayer16x16"
+    FLOYD_STEINBERG = "floyd_steinberg"
     RIEMERSMA = "riemersma"
     BLUE_NOISE = "blue_noise"
     POLKA_DOT = "polka_dot"
@@ -658,6 +659,105 @@ class HybridDitherStrategy(BaseDitherStrategy):
 
         np.clip(work_2d,0,255,out=work_2d)
         return work_2d.reshape((-1,3))
+
+
+# -------------------- Floyd-Steinberg Error Diffusion --------------------
+
+class FloydSteinbergDitherStrategy(BaseDitherStrategy):
+    """
+    Classic Floyd-Steinberg error diffusion algorithm.
+    Uses fixed weights to distribute quantization error to neighboring pixels.
+    
+    Error distribution pattern:
+           [ ] [X] [ ]
+           [3] [5] [1]  (divided by 16, with 7 going right from X)
+    
+    This is the most well-known dithering algorithm and produces good results
+    for most images.
+    """
+    
+    @staticmethod
+    def get_parameter_info():
+        """
+        Returns metadata about configurable parameters for this dithering mode.
+        """
+        return {
+            'serpentine': {
+                'type': 'choice',
+                'default': 'true',
+                'choices': ['true', 'false'],
+                'label': 'Serpentine Scan',
+                'description': 'Alternates direction each row to reduce artifacts'
+            }
+        }
+    
+    def __init__(self, serpentine: str = 'true'):
+        """
+        Initialize Floyd-Steinberg error diffusion.
+        
+        Args:
+            serpentine: Whether to use serpentine scanning (alternating row directions)
+        """
+        self.serpentine = (serpentine == 'true')
+    
+    def get_current_parameters(self):
+        """Returns current parameter values."""
+        return {
+            'serpentine': 'true' if self.serpentine else 'false'
+        }
+    
+    def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
+               image_size: Tuple[int, int]) -> np.ndarray:
+        h, w = image_size
+        work_2d = pixels.reshape((h, w, 3)).astype(np.float32).copy()
+        tree = KDTree(palette_arr)
+        
+        for y in range(h):
+            # Serpentine scanning: alternate row direction
+            if self.serpentine and (y % 2 == 1):
+                x_range = range(w - 1, -1, -1)
+                x_direction = -1
+            else:
+                x_range = range(w)
+                x_direction = 1
+            
+            for x in x_range:
+                old_val = work_2d[y, x].copy()
+                
+                # Find nearest palette color
+                _, idx = tree.query(old_val, k=1)
+                chosen = palette_arr[idx]
+                work_2d[y, x] = chosen
+                
+                # Calculate error
+                err = old_val - chosen
+                
+                # Distribute error using Floyd-Steinberg weights
+                # Pattern:      [X] 7→
+                #           3↙  5↓  1↘
+                
+                # Right pixel (7/16)
+                nx = x + x_direction
+                if 0 <= nx < w:
+                    work_2d[y, nx] += err * (7.0 / 16.0)
+                
+                # Bottom row
+                if y + 1 < h:
+                    # Bottom-left pixel (3/16)
+                    nx = x - x_direction
+                    if 0 <= nx < w:
+                        work_2d[y + 1, nx] += err * (3.0 / 16.0)
+                    
+                    # Bottom pixel (5/16)
+                    work_2d[y + 1, x] += err * (5.0 / 16.0)
+                    
+                    # Bottom-right pixel (1/16)
+                    nx = x + x_direction
+                    if 0 <= nx < w:
+                        work_2d[y + 1, nx] += err * (1.0 / 16.0)
+        
+        np.clip(work_2d, 0, 255, out=work_2d)
+        return work_2d.reshape((-1, 3))
 
 
 # -------------------- Ostromoukhov's Variable Error Diffusion --------------------
@@ -1307,6 +1407,8 @@ class ImageDitherer:
             return AdaptiveVarianceDitherStrategy.get_parameter_info()
         elif mode == DitherMode.HYBRID:
             return HybridDitherStrategy.get_parameter_info()
+        elif mode == DitherMode.FLOYD_STEINBERG:
+            return FloydSteinbergDitherStrategy.get_parameter_info()
         elif mode == DitherMode.OSTROMOUKHOV:
             return OstromoukhovDitherStrategy.get_parameter_info()
         # Add other modes here as they become configurable
@@ -1340,6 +1442,12 @@ class ImageDitherer:
             settings = {key: info['default'] for key, info in params.items()}
             settings.update(self.dither_params)
             return PolkaDotDitherStrategy(**settings)
+        elif mode == DitherMode.FLOYD_STEINBERG:
+            # Floyd-Steinberg with configurable parameters
+            params = FloydSteinbergDitherStrategy.get_parameter_info()
+            settings = {key: info['default'] for key, info in params.items()}
+            settings.update(self.dither_params)
+            return FloydSteinbergDitherStrategy(**settings)
         elif mode == DitherMode.RIEMERSMA:
             return RiemersmaDitherStrategy()
         elif mode == DitherMode.WAVELET:

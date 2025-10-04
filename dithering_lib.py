@@ -481,48 +481,75 @@ class HalftoneDitherStrategy(BaseDitherStrategy):
     """
     Newspaper-style halftone dithering using variable-sized dots on a regular grid.
     Creates the classic printed newspaper look with dots that vary in size based on brightness.
-    
-    ==================== ADJUSTABLE PARAMETERS ====================
-    
-    GRID PARAMETERS:
-    - cell_size: Distance between dot centers (default: 8)
-                 Smaller = finer detail, more dots
-                 Larger = coarser, more visible dots
-                 Try: 4-16 for different newspaper styles (8-12 is typical)
-    
-    - angle: Screen angle in degrees (default: 45)
-             45° is classic newspaper angle
-             Try: 0, 15, 45, 75 for different patterns
-    
-    DOT PARAMETERS:
-    - dot_gain: How quickly dots grow (default: 1.0)
-                1.0 = linear growth
-                Higher = more contrast, punchier blacks
-                Lower = softer, more gradual transitions
-                Try: 0.8-2.0
-    
-    - min_dot_size: Minimum dot threshold (default: 0.0)
-                    0.0 = can be completely white in highlights
-                    Try: 0.0-0.3
-    
-    - max_dot_size: Maximum dot threshold (default: 1.0)
-                    1.0 = can be completely dark in shadows
-                    Try: 0.8-1.0
-    
-    SHAPE PARAMETERS:
-    - shape: Dot shape (default: "circle")
-             Options: "circle", "square", "diamond"
-             Circle = classic newspaper
-             Square = more modern/digital
-             Diamond = softer, less geometric
-    
-    - sharpness: Edge sharpness (default: 1.5)
-                 Higher = sharper dot edges
-                 Lower = softer, more blended
-                 Try: 1.0-3.0
-    
-    ===============================================================
     """
+    
+    @staticmethod
+    def get_parameter_info():
+        """
+        Returns metadata about configurable parameters for this dithering mode.
+        This allows the GUI to build a settings dialog automatically.
+        """
+        return {
+            'cell_size': {
+                'type': 'int',
+                'default': 8,
+                'min': 2,
+                'max': 32,
+                'label': 'Cell Size',
+                'description': 'Distance between dot centers (smaller = finer detail)'
+            },
+            'angle': {
+                'type': 'float',
+                'default': 45.0,
+                'min': 0.0,
+                'max': 90.0,
+                'label': 'Screen Angle',
+                'description': 'Rotation angle in degrees (45° is classic newspaper)'
+            },
+            'dot_gain': {
+                'type': 'float',
+                'default': 1.0,
+                'min': 0.5,
+                'max': 3.0,
+                'step': 0.1,
+                'label': 'Dot Gain',
+                'description': 'Controls dot growth (1.0 = linear, higher = more contrast)'
+            },
+            'min_dot_size': {
+                'type': 'float',
+                'default': 0.0,
+                'min': 0.0,
+                'max': 0.5,
+                'step': 0.05,
+                'label': 'Min Dot Size',
+                'description': 'Minimum dot threshold (0 = pure white possible)'
+            },
+            'max_dot_size': {
+                'type': 'float',
+                'default': 1.0,
+                'min': 0.5,
+                'max': 1.0,
+                'step': 0.05,
+                'label': 'Max Dot Size',
+                'description': 'Maximum dot threshold (1.0 = pure black possible)'
+            },
+            'shape': {
+                'type': 'choice',
+                'default': 'circle',
+                'choices': ['circle', 'square', 'diamond'],
+                'label': 'Dot Shape',
+                'description': 'Shape of halftone dots'
+            },
+            'sharpness': {
+                'type': 'float',
+                'default': 1.5,
+                'min': 0.5,
+                'max': 4.0,
+                'step': 0.1,
+                'label': 'Sharpness',
+                'description': 'Edge sharpness (higher = crisper dots)'
+            }
+        }
     
     def __init__(self, 
                  cell_size: int = 8,
@@ -551,6 +578,18 @@ class HalftoneDitherStrategy(BaseDitherStrategy):
         self.max_dot_size = max_dot_size
         self.shape = shape
         self.sharpness = sharpness
+    
+    def get_current_parameters(self):
+        """Returns current parameter values."""
+        return {
+            'cell_size': self.cell_size,
+            'angle': self.angle,
+            'dot_gain': self.dot_gain,
+            'min_dot_size': self.min_dot_size,
+            'max_dot_size': self.max_dot_size,
+            'shape': self.shape,
+            'sharpness': self.sharpness
+        }
     
     def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
                image_size: Tuple[int, int]) -> np.ndarray:
@@ -906,11 +945,29 @@ class ImageDitherer:
                  num_colors: int=16,
                  dither_mode: Optional[DitherMode]=DitherMode.BAYER4x4,
                  palette: Optional[List[Tuple[int,int,int]]]=None,
-                 use_gamma: bool=False):
+                 use_gamma: bool=False,
+                 dither_params: Optional[dict]=None):
         self.num_colors = num_colors
         self.dither_mode = dither_mode
         self.palette = palette
         self.use_gamma = use_gamma
+        self.dither_params = dither_params or {}
+    
+    @staticmethod
+    def get_mode_parameters(mode: DitherMode) -> Optional[dict]:
+        """
+        Get parameter metadata for a specific dithering mode.
+        Returns None if the mode has no configurable parameters.
+        """
+        if mode == DitherMode.HALFTONE:
+            return HalftoneDitherStrategy.get_parameter_info()
+        # Add other modes here as they become configurable
+        return None
+    
+    @staticmethod
+    def mode_has_parameters(mode: DitherMode) -> bool:
+        """Check if a dithering mode has configurable parameters."""
+        return ImageDitherer.get_mode_parameters(mode) is not None
 
     def _get_dither_strategy(self, mode: DitherMode) -> BaseDitherStrategy:
         if mode == DitherMode.NONE:
@@ -939,17 +996,12 @@ class ImageDitherer:
             # Example: fully diffuse luminance, 20% color
             return HybridDitherStrategy(lum_factor=1.0, col_factor=0.2)
         elif mode == DitherMode.HALFTONE:
-            # Newspaper-style halftone with tunable parameters
-            # TWEAK THESE VALUES TO GET YOUR PERFECT NEWSPAPER LOOK:
-            return HalftoneDitherStrategy(
-                cell_size=8,        # Try 4-16 (smaller = finer dots, 8-12 is good for newspaper)
-                angle=45.0,         # Try 0, 15, 45, 75 (45° is classic newspaper)
-                dot_gain=1.0,       # Try 0.8-2.0 (1.0 = linear, higher = more contrast)
-                min_dot_size=0.0,   # Try 0.0-0.3 (0 = can be fully white)
-                max_dot_size=1.0,   # Try 0.8-1.0 (1.0 = can be fully dark)
-                shape="circle",     # Try "circle", "square", "diamond"
-                sharpness=1.5       # Try 1.0-3.0 (higher = sharper edges)
-            )
+            # Newspaper-style halftone with configurable parameters
+            # Get defaults and override with user settings
+            params = HalftoneDitherStrategy.get_parameter_info()
+            settings = {key: info['default'] for key, info in params.items()}
+            settings.update(self.dither_params)
+            return HalftoneDitherStrategy(**settings)
         else:
             raise ValueError(f"Unrecognized DitherMode: {mode}")
 

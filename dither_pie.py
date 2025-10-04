@@ -36,7 +36,8 @@ from video_processor import VideoProcessor, NeuralPixelizer, pixelize_regular
 from gui_components import (
     ZoomableImage,
     ProgressDialog,
-    StatusBar
+    StatusBar,
+    DitherSettingsDialog
 )
 from utils import (
     PaletteManager,
@@ -91,6 +92,9 @@ class DitheringApp(ctk.CTk):
             "source_hash": None  # Hash of source image to detect changes
         }
         
+        # Dither mode parameters storage
+        self.dither_parameters = {}  # Stores custom parameters for dithering modes
+        
         # Palette manager
         self.palette_mgr = PaletteManager()
         
@@ -107,6 +111,9 @@ class DitheringApp(ctk.CTk):
         
         # Set up close handler to save config
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
+        
+        # Initialize settings button state
+        self._update_dither_settings_button_state()
     
     def _compute_image_hash(self, image: Image.Image) -> str:
         """
@@ -329,17 +336,33 @@ class DitheringApp(ctk.CTk):
         ctk.CTkLabel(self.sidebar, text="Dither Mode:").grid(row=row, column=0, pady=2, padx=10, sticky='w')
         row += 1
         
+        # Frame for dropdown + settings button
+        dither_mode_frame = ctk.CTkFrame(self.sidebar, fg_color="transparent")
+        dither_mode_frame.grid(row=row, column=0, pady=2, padx=10, sticky='ew')
+        dither_mode_frame.grid_columnconfigure(0, weight=1)
+        
         self.dither_mode = ctk.StringVar(
             value=self.config.get("defaults", "dither_mode", default="bayer4x4")
         )
         dither_modes = [mode.value for mode in DitherMode]
         self.dither_dropdown = ctk.CTkOptionMenu(
-            self.sidebar,
+            dither_mode_frame,
             variable=self.dither_mode,
             values=dither_modes,
             command=self._on_dither_mode_changed
         )
-        self.dither_dropdown.grid(row=row, column=0, pady=2, padx=10, sticky='ew')
+        self.dither_dropdown.grid(row=0, column=0, sticky='ew', padx=(0, 5))
+        
+        # Settings button (cog icon)
+        self.dither_settings_button = ctk.CTkButton(
+            dither_mode_frame,
+            text="⚙",
+            width=35,
+            command=self._on_dither_settings_clicked,
+            font=("Arial", 16)
+        )
+        self.dither_settings_button.grid(row=0, column=1)
+        
         row += 1
         
         # Number of colors
@@ -427,11 +450,12 @@ class DitheringApp(ctk.CTk):
         self.apply_video_button.configure(state="disabled")
         self.btn_save.configure(state="disabled")
         self.btn_toggle.configure(state="disabled")
-        # Keep btn_fit and dither_dropdown enabled so user can fit preview and change dither mode while choosing palette
+        # Keep btn_fit, dither_dropdown, and dither_settings_button enabled so user can adjust settings while choosing palette
         self.max_size_entry.configure(state="disabled")
         self.colors_entry.configure(state="disabled")
         self.resize_multiplier_entry.configure(state="disabled")
         # self.dither_dropdown stays enabled for live preview
+        # self.dither_settings_button stays enabled (if applicable) for live parameter adjustment
     
     def _enable_controls(self):
         """Re-enable all control buttons and inputs after palette selection."""
@@ -450,13 +474,64 @@ class DitheringApp(ctk.CTk):
         self.resize_multiplier_entry.configure(state="normal")
         # self.dither_dropdown already enabled
     
+    def _update_dither_settings_button_state(self):
+        """Enable/disable settings button based on current dither mode."""
+        try:
+            mode = DitherMode(self.dither_mode.get())
+            has_params = ImageDitherer.mode_has_parameters(mode)
+            
+            if has_params:
+                self.dither_settings_button.configure(state="normal")
+            else:
+                self.dither_settings_button.configure(state="disabled")
+        except:
+            self.dither_settings_button.configure(state="disabled")
+    
     def _on_dither_mode_changed(self, selected_value):
         """
         Callback when dither mode dropdown is changed.
-        If palette dialog is open, trigger preview regeneration.
+        Updates settings button state and triggers preview regeneration if needed.
         """
+        # Update settings button state
+        self._update_dither_settings_button_state()
+        
+        # If palette dialog is open, trigger preview regeneration
         if self.palette_dialog_open and self.on_dither_mode_changed_callback:
             self.on_dither_mode_changed_callback()
+    
+    def _on_dither_settings_clicked(self):
+        """Open settings dialog for current dithering mode."""
+        try:
+            mode = DitherMode(self.dither_mode.get())
+            param_info = ImageDitherer.get_mode_parameters(mode)
+            
+            if not param_info:
+                messagebox.showinfo("No Settings", "This dithering mode has no configurable parameters.")
+                return
+            
+            # Get current values or use defaults
+            current_values = self.dither_parameters.get(mode.value, {})
+            
+            # Open settings dialog
+            dialog = DitherSettingsDialog(
+                self,
+                mode.value.capitalize(),
+                param_info,
+                current_values
+            )
+            self.wait_window(dialog)
+            
+            # If user applied settings, store them
+            if dialog.result_values is not None:
+                self.dither_parameters[mode.value] = dialog.result_values
+                self.status_bar.set_status(f"Updated {mode.value} settings")
+                
+                # If palette dialog is open, trigger preview regeneration with new settings
+                if self.palette_dialog_open and self.on_dither_mode_changed_callback:
+                    self.on_dither_mode_changed_callback()
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to open settings:\n{e}")
     
     def load_image(self):
         """Load an image file."""
@@ -845,8 +920,12 @@ class DitheringApp(ctk.CTk):
             if is_generating[0]:
                 return  # Skip if already generating
             
-            # Create cache key that includes gamma state and dither mode
-            cache_key = f"{palette_name}_gamma{gamma_var.get()}_dither{self.dither_mode.get()}"
+            # Create cache key that includes gamma state, dither mode, AND dither parameters
+            dither_mode_val = self.dither_mode.get()
+            mode_params = self.dither_parameters.get(dither_mode_val, {})
+            # Convert params dict to a stable string for cache key
+            params_str = "_".join(f"{k}={v}" for k, v in sorted(mode_params.items()))
+            cache_key = f"{palette_name}_gamma{gamma_var.get()}_dither{dither_mode_val}_params{params_str}"
             
             # Check cache first
             if cache_key in preview_cache:
@@ -869,11 +948,15 @@ class DitheringApp(ctk.CTk):
                     dither_mode = DitherMode.BAYER4x4
                 
                 # Create ditherer with gamma from dialog
+                # Get custom parameters for this mode
+                mode_params = self.dither_parameters.get(dither_mode.value, {})
+                
                 ditherer = ImageDitherer(
                     num_colors=num_colors,
                     dither_mode=dither_mode,
                     palette=palette,
-                    use_gamma=gamma_var.get()
+                    use_gamma=gamma_var.get(),
+                    dither_params=mode_params
                 )
                 
                 # Apply dithering to source image
@@ -1056,7 +1139,10 @@ class DitheringApp(ctk.CTk):
             
             # The preview is already showing in the main window
             # If it's cached, use that, otherwise it will be generated below
-            cache_key = f"{sel_name}_gamma{gamma_var.get()}_dither{self.dither_mode.get()}"
+            dither_mode_val = self.dither_mode.get()
+            mode_params = self.dither_parameters.get(dither_mode_val, {})
+            params_str = "_".join(f"{k}={v}" for k, v in sorted(mode_params.items()))
+            cache_key = f"{sel_name}_gamma{gamma_var.get()}_dither{dither_mode_val}_params{params_str}"
             if cache_key in preview_cache:
                 self.dithered_image = preview_cache[cache_key]
                 self.display_state = "dithered"
@@ -1125,11 +1211,15 @@ class DitheringApp(ctk.CTk):
             self.status_bar.set_status("Applying final dithering...")
             
             def process():
+                # Get custom parameters for this mode
+                mode_params = self.dither_parameters.get(dither_mode.value, {})
+                
                 ditherer = ImageDitherer(
                     num_colors=num_colors,
                     dither_mode=dither_mode,
                     palette=selected_palette[0],
-                    use_gamma=gamma_var.get()
+                    use_gamma=gamma_var.get(),
+                    dither_params=mode_params
                 )
                 
                 # Use pixelized image if available, otherwise use current image
@@ -1192,12 +1282,16 @@ class DitheringApp(ctk.CTk):
         self.status_bar.set_status("Processing video (check console for progress)...")
         
         def process():
+            # Get custom parameters for this mode
+            mode_params = self.dither_parameters.get(dither_mode.value, {})
+            
             # Create ditherer
             ditherer = ImageDitherer(
                 num_colors=num_colors,
                 dither_mode=dither_mode,
                 palette=self.last_palette,
-                use_gamma=self.last_gamma
+                use_gamma=self.last_gamma,
+                dither_params=mode_params
             )
             
             # Create pixelize function if pixelized image exists

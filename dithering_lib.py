@@ -797,21 +797,35 @@ class HalftoneDitherStrategy(BaseDitherStrategy):
         # Generate halftone screen and get cell assignments
         halftone_screen, cell_assignments = self._generate_halftone_screen_with_cells(h, w)
         
-        # For each cell (dot), determine ONE ink color by sampling the cell center
-        unique_cells = np.unique(cell_assignments)
-        cell_colors = {}
+        # OPTIMIZED: Compute average color per cell using bincount (vectorized)
+        # Flatten everything for easier processing
+        cell_ids_flat = cell_assignments.flatten()
+        pixels_flat = pix_2d.reshape(-1, 3)
         
-        for cell_id in unique_cells:
-            # Find all pixels in this cell
-            cell_mask = (cell_assignments == cell_id)
-            cell_pixels = pix_2d[cell_mask]
-            
-            if len(cell_pixels) > 0:
-                # Use the average color of the cell to determine ink color
-                avg_color = np.mean(cell_pixels, axis=0)
-                # Find nearest palette color for this entire dot
-                _, idx = tree.query(avg_color.reshape(1, -1), k=1)
-                cell_colors[cell_id] = idx[0]
+        # Find unique cells and their average colors
+        unique_cells = np.unique(cell_ids_flat)
+        num_cells = len(unique_cells)
+        
+        # Create a mapping from cell_id to a contiguous index for faster access (vectorized)
+        # Use searchsorted for fast lookup
+        cell_idx_flat = np.searchsorted(unique_cells, cell_ids_flat)
+        
+        # Compute sum of colors per cell (vectorized)
+        cell_color_sum = np.zeros((num_cells, 3), dtype=np.float64)
+        cell_count = np.bincount(cell_idx_flat, minlength=num_cells)
+        
+        for c in range(3):  # For each color channel
+            cell_color_sum[:, c] = np.bincount(cell_idx_flat, weights=pixels_flat[:, c], minlength=num_cells)
+        
+        # Compute average color per cell
+        cell_avg_colors = cell_color_sum / np.maximum(cell_count[:, np.newaxis], 1)
+        
+        # Query all cell colors at once (batch query is faster)
+        _, cell_palette_indices = tree.query(cell_avg_colors, k=1)
+        
+        # Create a lookup array from cell_id to palette index
+        cell_id_to_palette = np.zeros(unique_cells.max() + 1, dtype=np.int32)
+        cell_id_to_palette[unique_cells] = cell_palette_indices.flatten()
         
         # NEWSPAPER LOGIC:
         # Start with PAPER everywhere
@@ -824,12 +838,9 @@ class HalftoneDitherStrategy(BaseDitherStrategy):
         # Start with paper everywhere
         result = np.full((h, w), paper_idx, dtype=np.int32)
         
-        # Place ink dots - each cell gets its ONE color
-        for cell_id, color_idx in cell_colors.items():
-            cell_mask = (cell_assignments == cell_id)
-            # Only place ink where both: (1) in this cell, (2) ink is needed
-            place_ink_in_cell = cell_mask & place_ink
-            result[place_ink_in_cell] = color_idx
+        # Place ink dots - vectorized assignment
+        # Where ink is needed, use the cell's assigned color
+        result[place_ink] = cell_id_to_palette[cell_assignments[place_ink]]
         
         return palette_arr[result.flatten(), :]
     

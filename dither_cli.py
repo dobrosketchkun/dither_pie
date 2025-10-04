@@ -669,6 +669,163 @@ def process_single_video(config: Dict[str, Any], neural_pixelizer: Optional[Neur
         return False
 
 
+# ==================== Batch Folder Processing ====================
+
+def process_folder(config: Dict[str, Any]) -> bool:
+    """
+    Process all images or videos in a folder.
+    
+    Args:
+        config: Validated configuration dictionary
+        
+    Returns:
+        True if at least one file processed successfully, False otherwise
+    """
+    try:
+        input_path = Path(config["input"])
+        output_path = Path(config["output"])
+        
+        if not input_path.is_dir():
+            logger.error(f"Input path is not a directory: {input_path}")
+            return False
+        
+        # Determine file type based on first few files or config hint
+        image_exts = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp'}
+        video_exts = {'.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv'}
+        
+        # Scan directory for processable files
+        all_files = list(input_path.iterdir())
+        image_files = [f for f in all_files if f.is_file() and f.suffix.lower() in image_exts]
+        video_files = [f for f in all_files if f.is_file() and f.suffix.lower() in video_exts]
+        
+        # Determine what to process
+        process_images = len(image_files) > 0
+        process_videos = len(video_files) > 0
+        
+        if not process_images and not process_videos:
+            logger.error(f"No processable image or video files found in: {input_path}")
+            return False
+        
+        # Create output directory
+        output_path.mkdir(parents=True, exist_ok=True)
+        
+        total_files = len(image_files) + len(video_files)
+        logger.info(f"Found {len(image_files)} images and {len(video_files)} videos")
+        logger.info(f"Output directory: [cyan]{output_path}[/]")
+        logger.info("")
+        
+        # Track results
+        success_count = 0
+        failed_count = 0
+        failed_files = []
+        
+        # Pre-load neural pixelizer if needed (for performance)
+        neural_pixelizer = None
+        if config["pixelization"]["enabled"] and config["pixelization"]["method"] == "neural":
+            logger.info("Pre-loading neural pixelization models... [dim](one-time setup)[/]")
+            try:
+                neural_pixelizer = NeuralPixelizer()
+                logger.info("[green]✓[/] Neural models loaded")
+            except Exception as e:
+                logger.error(f"Failed to load neural models: {e}")
+                return False
+        
+        # Process images
+        if process_images:
+            logger.info(f"[bold cyan]Processing {len(image_files)} images...[/]")
+            logger.info("")
+            
+            for idx, image_file in enumerate(image_files, 1):
+                try:
+                    # Generate output filename
+                    output_file = output_path / image_file.name
+                    
+                    # Create config for this file
+                    file_config = config.copy()
+                    file_config["input"] = str(image_file)
+                    file_config["output"] = str(output_file)
+                    file_config["mode"] = "image"
+                    
+                    logger.info(f"[{idx}/{len(image_files)}] Processing: [cyan]{image_file.name}[/]")
+                    
+                    # Process the image
+                    success = process_single_image(file_config)
+                    
+                    if success:
+                        success_count += 1
+                    else:
+                        failed_count += 1
+                        failed_files.append(image_file.name)
+                    
+                    logger.info("")  # Empty line between files
+                    
+                except KeyboardInterrupt:
+                    logger.warning("\n[yellow]Processing interrupted by user[/]")
+                    break
+                except Exception as e:
+                    logger.error(f"Error processing {image_file.name}: {e}")
+                    failed_count += 1
+                    failed_files.append(image_file.name)
+                    logger.info("")
+        
+        # Process videos
+        if process_videos:
+            logger.info(f"[bold cyan]Processing {len(video_files)} videos...[/]")
+            logger.info("")
+            
+            for idx, video_file in enumerate(video_files, 1):
+                try:
+                    # Generate output filename
+                    output_file = output_path / video_file.name
+                    
+                    # Create config for this file
+                    file_config = config.copy()
+                    file_config["input"] = str(video_file)
+                    file_config["output"] = str(output_file)
+                    file_config["mode"] = "video"
+                    
+                    logger.info(f"[{idx}/{len(video_files)}] Processing: [cyan]{video_file.name}[/]")
+                    
+                    # Process the video (pass pre-loaded neural pixelizer)
+                    success = process_single_video(file_config, neural_pixelizer=neural_pixelizer)
+                    
+                    if success:
+                        success_count += 1
+                    else:
+                        failed_count += 1
+                        failed_files.append(video_file.name)
+                    
+                    logger.info("")  # Empty line between files
+                    
+                except KeyboardInterrupt:
+                    logger.warning("\n[yellow]Processing interrupted by user[/]")
+                    break
+                except Exception as e:
+                    logger.error(f"Error processing {video_file.name}: {e}")
+                    failed_count += 1
+                    failed_files.append(video_file.name)
+                    logger.info("")
+        
+        # Summary
+        logger.info("[bold]═══════════════════════════════════════[/]")
+        logger.info(f"[bold]Batch Processing Summary[/]")
+        logger.info("[bold]═══════════════════════════════════════[/]")
+        logger.info(f"Total files:     {total_files}")
+        logger.info(f"[green]Successful:[/]     {success_count}")
+        if failed_count > 0:
+            logger.info(f"[red]Failed:[/]         {failed_count}")
+            logger.info("")
+            logger.info("[red]Failed files:[/]")
+            for failed_file in failed_files:
+                logger.info(f"  • {failed_file}")
+        
+        return success_count > 0
+        
+    except Exception as e:
+        logger.error(f"Failed to process folder: {e}", exc_info=True)
+        return False
+
+
 def show_banner():
     """Display application banner."""
     banner = """
@@ -862,9 +1019,7 @@ def main():
         success = process_single_video(config)
         
     elif mode == "folder":
-        # Folder processing will be implemented in Phase 5
-        logger.error("Folder batch processing not yet implemented (Phase 5)")
-        success = False
+        success = process_folder(config)
     
     # Exit with appropriate code
     if success:

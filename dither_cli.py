@@ -58,15 +58,25 @@ def setup_logging(verbose: bool = False, quiet: bool = False, log_file: Optional
     # Configure logging
     handlers = []
     
-    # Rich handler for console output
-    rich_handler = RichHandler(
-        console=console,
-        show_time=True,
-        show_path=False,
-        markup=True,
-        rich_tracebacks=True
-    )
-    handlers.append(rich_handler)
+    # Use Rich handler only if stdout is a real terminal
+    # Otherwise use plain StreamHandler to avoid Unicode encoding issues
+    if sys.stdout.isatty():
+        # Rich handler for console output
+        rich_handler = RichHandler(
+            console=console,
+            show_time=True,
+            show_path=False,
+            markup=True,
+            rich_tracebacks=True
+        )
+        handlers.append(rich_handler)
+    else:
+        # Plain handler for redirected output
+        stream_handler = logging.StreamHandler(sys.stdout)
+        stream_handler.setFormatter(
+            logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        )
+        handlers.append(stream_handler)
     
     # File handler if specified
     if log_file:
@@ -106,18 +116,20 @@ class CLIProgressCallback:
         self.total_frames = total_frames
         self.progress = None
         self.task = None
+        self.use_rich = sys.stdout.isatty()  # Only use Rich if terminal
     
     def __enter__(self):
         """Setup progress bar."""
-        self.progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            console=console
-        )
-        self.progress.__enter__()
-        self.task = self.progress.add_task("Processing video...", total=100)
+        if self.use_rich:
+            self.progress = Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                console=console
+            )
+            self.progress.__enter__()
+            self.task = self.progress.add_task("Processing video...", total=100)
         return self
     
     def __exit__(self, *args):
@@ -133,14 +145,20 @@ class CLIProgressCallback:
             fraction: Progress fraction (0.0 to 1.0)
             message: Status message
         """
-        if self.progress and self.task is not None:
+        if self.use_rich and self.progress and self.task is not None:
             percentage = fraction * 100
             self.progress.update(self.task, completed=percentage, description=message)
+        elif not self.use_rich:
+            # Plain text progress for redirected output
+            percentage = int(fraction * 100)
+            print(f"Progress: {percentage}% - {message}", flush=True)
     
     def finish(self):
         """Mark as complete."""
-        if self.progress and self.task is not None:
+        if self.use_rich and self.progress and self.task is not None:
             self.progress.update(self.task, completed=100, description="Complete!")
+        elif not self.use_rich:
+            print("Progress: 100% - Complete!", flush=True)
 
 
 # ==================== Config Schema & Validation ====================
@@ -1028,8 +1046,8 @@ def main():
     # Setup logging
     setup_logging(verbose=args.verbose, quiet=args.quiet, log_file=args.log_file)
     
-    # Show banner (unless quiet mode)
-    if not args.quiet:
+    # Show banner (unless quiet mode or output is redirected)
+    if not args.quiet and sys.stdout.isatty():
         show_banner()
     
     # Check if config file provided

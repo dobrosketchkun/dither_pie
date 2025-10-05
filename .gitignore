@@ -14,3 +14,14 @@ __pycache__/
 dithering_lib.py
 *.mdc
 misc/old/
+!misc/based_video_v.mp4
+!misc/based_video.mp4
+!misc/before_after_reg_neur.png
+!misc/bo_video_v.mp4
+!misc/bo_video.mp4
+!misc/hahaha_video_v.mp4
+!misc/hahaha_video.mp4
+!misc/live_palette_preview.mp4
+!misc/main_window.png
+!misc/pallete_and_dither.png
+!misc/pallete_dialogue.png

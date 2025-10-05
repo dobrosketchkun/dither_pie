@@ -16,6 +16,12 @@ python dither_pie.py --example-config > my_config.json
 # Process with config file
 python dither_pie.py my_config.json
 
+# Process specific file with config settings (input override)
+python dither_pie.py my_config.json input_image.png
+
+# Process folder with config settings (input override)
+python dither_pie.py my_config.json my_images/
+
 # Verbose output
 python dither_pie.py -v my_config.json
 
@@ -37,6 +43,50 @@ python dither_pie.py --log-file processing.log my_config.json
 
 ---
 
+## Input Override Feature
+
+You can use a config file's settings with **different input files** by providing a second argument:
+
+```bash
+python dither_pie.py config.json <input_file_or_folder>
+```
+
+**What happens:**
+- Config settings (dithering, palette, etc.) are used from `config.json`
+- Input/output paths from config are **ignored**
+- Input is taken from the second argument
+- Output is **auto-generated** with descriptive filename
+
+**Examples:**
+
+```bash
+# Apply settings to specific image (auto-generates output name)
+python dither_pie.py settings.json photo.jpg
+# Output: photo_bayer_16c.jpg (in same directory)
+
+# Apply settings to folder (creates processed folder)
+python dither_pie.py settings.json images/
+# Output: images_processed/ folder
+
+# With different file types
+python dither_pie.py settings.json video.mp4
+# Output: video_pixelized_bayer_16c.mp4
+```
+
+**Auto-generated filenames include:**
+- Base filename (truncated to 30 chars)
+- Pixelization method and size (if enabled): `pix64`, `pix150`
+- Dither mode: `bayer`, `error_diffusion`, etc.
+- Palette info: `16c`, `km32c`, `gameboy_dmg`
+- Gamma: `gamma` (if enabled)
+
+**Example output names:**
+- `sunset_pix128_bayer_16c.png`
+- `portrait_neural_pix64_error_diffusion_32c_gamma.png`
+- `video_bayer_gameboy_dmg.mp4`
+
+---
+
 ## Configuration File Format
 
 All processing parameters are specified in a JSON configuration file.
@@ -55,6 +105,8 @@ This will:
 - Skip pixelization
 - Apply Bayer dithering
 - Use median-cut palette with 16 colors
+
+**Note:** When using input override (second argument), the `input` and `output` fields are ignored and can be set to dummy values like `"input.png"` and `"output.png"`.
 
 ### Full Configuration
 
@@ -91,8 +143,8 @@ This will:
 
 ### Required Fields
 
-- **`input`**: Path to input file or directory
-- **`output`**: Path to output file or directory
+- **`input`**: Path to input file or directory (ignored if using input override)
+- **`output`**: Path to output file or directory (ignored if using input override)
 
 ### Optional Fields
 
@@ -218,7 +270,11 @@ Features:
 ### Basic Image Dithering
 
 ```bash
+# Using config file
 python dither_pie.py examples/image_basic.json
+
+# Using config with input override
+python dither_pie.py examples/image_basic.json my_photo.jpg
 ```
 
 ### Retro Pixel Art Effect
@@ -230,7 +286,11 @@ python dither_pie.py examples/image_pixelized.json
 ### Neural Pixelization
 
 ```bash
+# Process single image
 python dither_pie.py examples/image_neural.json
+
+# Apply same neural settings to different file
+python dither_pie.py examples/image_neural.json another_image.png
 ```
 
 ### Custom Palette
@@ -242,13 +302,38 @@ python dither_pie.py examples/image_custom_palette.json
 ### Video Processing
 
 ```bash
+# Using config file
 python dither_pie.py examples/video_basic.json
+
+# Apply video settings to different video
+python dither_pie.py examples/video_basic.json my_video.mp4
 ```
 
 ### Batch Processing
 
 ```bash
+# Using config file
 python dither_pie.py examples/batch_folder.json
+
+# Apply same settings to different folder
+python dither_pie.py examples/batch_folder.json vacation_photos/
+# Output: vacation_photos_processed/
+```
+
+### Input Override Workflow
+
+```bash
+# 1. Create or edit a settings file with your preferred parameters
+python dither_pie.py --example-config > my_style.json
+# Edit my_style.json: set dithering mode, colors, pixelization, etc.
+
+# 2. Apply to any file/folder
+python dither_pie.py my_style.json photo1.jpg
+python dither_pie.py my_style.json photo2.png
+python dither_pie.py my_style.json video.mp4
+python dither_pie.py my_style.json all_photos/
+
+# Each generates appropriate output with descriptive filename
 ```
 
 ---
@@ -316,10 +401,12 @@ In `process.json`:
 ### Success
 
 ```
-╔═══════════════════════════════════════╗
-║      Dither Pie CLI - v1.0        ║
-║  Image & Video Dithering Tool      ║
-╚═══════════════════════════════════════╝
+░░░░       ░░░        ░░        ░░  ░░░░  ░░        ░░       ░░░░░░░░░       ░░░        ░░        ░░░░░░░░░      ░░░  ░░░░░░░░        ░░░░
+▒▒▒▒  ▒▒▒▒  ▒▒▒▒▒  ▒▒▒▒▒▒▒▒  ▒▒▒▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒▒▒▒▒  ▒▒▒▒  ▒▒▒▒▒▒▒▒  ▒▒▒▒  ▒▒▒▒▒  ▒▒▒▒▒  ▒▒▒▒▒▒▒▒▒▒▒▒▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒▒▒▒▒▒▒▒  ▒▒▒▒▒▒▒
+▓▓▓▓  ▓▓▓▓  ▓▓▓▓▓  ▓▓▓▓▓▓▓▓  ▓▓▓▓▓        ▓▓      ▓▓▓▓       ▓▓▓▓▓▓▓▓▓       ▓▓▓▓▓▓  ▓▓▓▓▓      ▓▓▓▓▓▓▓▓▓▓  ▓▓▓▓▓▓▓▓  ▓▓▓▓▓▓▓▓▓▓▓  ▓▓▓▓▓▓▓
+████  ████  █████  ████████  █████  ████  ██  ████████  ███  █████████  ███████████  █████  ██████████████  ████  ██  ███████████  ███████
+████       ███        █████  █████  ████  ██        ██  ████  ████████  ████████        ██        █████████      ███        ██        ████
+
 
 [18:30:00] INFO     Loading configuration from: config.json
            INFO     ✓ Configuration validated

@@ -73,9 +73,9 @@ A powerful Python-based application for applying artistic dithering and pixeliza
 
 ### Video Processing Preview
 
-[<img src="misc/based_video_v.mp4" alt="Video Processing Preview" />](## "Video Processing Preview")  
-[<img src="misc/bo_video_v.mp4" alt="Video Processing Preview" />](## "Video Processing Preview")  
-[<img src="misc/hahaha_video.mp4" alt="Video Processing Preview" />](## "Video Processing Preview")  
+<video src="https://github.com/user-attachments/assets/fa8d2a63-8821-4859-96f5-7cb6e32af45d"></video>  
+<video src="https://github.com/user-attachments/assets/b83c9bc7-1f2e-4d47-862d-5a9e9aa5f928"></video>  
+<video src="https://github.com/user-attachments/assets/0557a0a1-9d8f-44cf-821c-738b1224cc36"></video>  
 
 ---
 

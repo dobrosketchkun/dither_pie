@@ -54,7 +54,7 @@ A powerful Python-based application for applying artistic dithering and pixeliza
 
 ### Live Palette Preview
 
-[<img src="misc/live_palette_preview.mp4" alt="Live Preview Feature" />](## "Live Preview Feature")  
+<video src="https://github.com/user-attachments/assets/9e1bd1a9-f81e-43a7-9194-3f3f029deb61"></video>  
 
 
 ### Before/After Comparison Grid
@@ -68,8 +68,8 @@ A powerful Python-based application for applying artistic dithering and pixeliza
 
 
 ### Custom Palette Dialog
+[<img src="misc/pallete_dialogue.png" alt="Dithering and Palettes Showcase" />](## "Dithering and Palettes Showcase")  
 
-[<img src="misc/pallete_dialogue.png" alt="Custom Palette Dialog />](## "Custom Palette Dialog")  
 
 ### Video Processing Preview
 
@@ -500,47 +500,4 @@ Neural pixelization models from:
 - [arenasys/pixelization_inference](https://github.com/arenasys/pixelization_inference)
 - [WuZongWei6/Pixelization](https://github.com/WuZongWei6/Pixelization)
 
----
-
-## 📝 Changelog
-
-### Latest Features
-- ✨ **CLI Mode**: Full command-line interface with batch processing and automation support
-- ✨ **Batch Folder Processing**: Process entire directories with progress tracking
-- ✨ **Rich Terminal Output**: Beautiful CLI with progress bars, spinners, and colored logging
-- ✨ **JSON Configuration**: Reusable config files for consistent processing
-- ✨ **Input Override**: Apply same settings to different files easily
-- ✨ **Configurable Dithering Algorithms**: Settings dialog (⚙️) for fine-tuning 10+ modes
-- ✨ **Consolidated Algorithms**: Bayer sizes and Error Diffusion variants in single modes
-- ✨ **Toggle View During Preview**: Compare original with dithered preview in real-time
-- ✨ **Animated Status Bar**: Visual feedback with customizable spinner styles
-- ✨ **Blue Noise Caching**: Generated matrices cached in memory for performance
-- ✨ **Halftone Mode**: Authentic newspaper printing simulation with configurable parameters
-- ✨ **Live Palette Preview**: See results in main window before applying
-- ✨ **Smart Pixelization Caching**: Instant re-dithering without re-processing
-- ✨ **Persistent User Preferences**: All settings saved to config.json
-
-### Coming Soon
-- 🔜 Preset management (save/load settings in GUI)
-- 🔜 Export palette from result
-- 🔜 Undo/redo system
-- 🔜 Drag-and-drop file loading
-
----
-
-## 📄 License
-
-> **TODO: Add your license information here**
-
----
-
-## 🤝 Contributing
-
-> **TODO: Add contribution guidelines if open source**
-
----
-
-## 📧 Contact
-
-> **TODO: Add contact information or GitHub repo link**
 

@@ -302,7 +302,7 @@ class DitheringApp(ctk.CTk):
         self.resize_multiplier_entry = tk.Spinbox(
             self.sidebar,
             from_=1,
-            to=10,
+            to=999,
             width=10,
             command=self._update_resize_preview,
             font=("Arial", 11)

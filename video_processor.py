@@ -238,6 +238,10 @@ class VideoProcessor:
                     # Load model once in main process
                     pixelizer = NeuralPixelizer()
                     
+                    # Import for memory management
+                    import gc
+                    import torch
+                    
                     failed_frames = []
                     for frame_file in frame_files:
                         success = False
@@ -273,6 +277,15 @@ class VideoProcessor:
                             failed_frames.append(frame_file)
                         
                         processed_count += 1
+                        
+                        # CRITICAL: Clear memory every frame to prevent accumulation
+                        # Neural processing can accumulate GB of memory without this
+                        if processed_count % 5 == 0:
+                            # Aggressive garbage collection every 5 frames
+                            gc.collect()
+                            if torch.cuda.is_available():
+                                torch.cuda.empty_cache()
+                        
                         if processed_count % 5 == 0:  # Report every 5 frames
                             progress = 0.1 + 0.8 * (processed_count / total_frames)
                             self._report_progress(progress, 
@@ -491,6 +504,7 @@ class NeuralPixelizer:
         Returns:
             Pixelized PIL Image
         """
+        import torch
         from models.pixelization import resize_image
         
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -514,6 +528,10 @@ class NeuralPixelizer:
             orig_w, orig_h = result.size
             target_w, target_h = self._compute_even_dimensions(orig_w, orig_h, max_size)
             result = result.resize((target_w, target_h), Image.Resampling.NEAREST)
+            
+            # Clear PyTorch cache after inference to prevent memory accumulation
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             
             return result
     

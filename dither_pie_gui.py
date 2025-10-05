@@ -835,8 +835,10 @@ class DitheringApp(ctk.CTk):
         # Store for toggle view functionality
         self.palette_original_image = original_displayed_image
         
-        # Cache for preview results
-        preview_cache = {}
+        # Cache for preview results with LRU eviction 
+        from collections import OrderedDict
+        preview_cache = OrderedDict()
+        max_cache_size = 30
         is_generating = [False]  # Use list for mutable flag
         first_preview = [True]  # Track if this is the first preview (to fit to window once)
         
@@ -931,6 +933,8 @@ class DitheringApp(ctk.CTk):
             
             # Check cache first
             if cache_key in preview_cache:
+                # LRU: Move to end (mark as recently used)
+                preview_cache.move_to_end(cache_key)
                 self.after(0, lambda: display_preview(preview_cache[cache_key]))
                 self.after(0, lambda: self.status_bar.set_status(f"Preview: {palette_name} (cached)"))
                 return
@@ -966,8 +970,12 @@ class DitheringApp(ctk.CTk):
                 # NOTE: Do NOT apply final_resize here - we want to see the actual dithered pixels
                 # Final resize should only happen when saving
                 
-                # Cache the result with gamma in key
+                # Cache the result with gamma in key (LRU: add to end)
                 preview_cache[cache_key] = preview_result
+                
+                # LRU eviction: Remove oldest if cache exceeds max size
+                if len(preview_cache) > max_cache_size:
+                    preview_cache.popitem(last=False)  # Remove first (oldest) item
                 
                 # Display in MAIN viewer
                 self.after(0, lambda: display_preview(preview_result))
@@ -1152,6 +1160,8 @@ class DitheringApp(ctk.CTk):
             params_str = "_".join(f"{k}={v}" for k, v in sorted(mode_params.items()))
             cache_key = f"{sel_name}_gamma{gamma_var.get()}_dither{dither_mode_val}_params{params_str}"
             if cache_key in preview_cache:
+                # LRU: Move to end (mark as recently used)
+                preview_cache.move_to_end(cache_key)
                 self.dithered_image = preview_cache[cache_key]
                 self.display_state = "dithered"
             

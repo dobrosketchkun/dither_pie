@@ -976,7 +976,7 @@ def show_help():
     for mode in DitherMode:
         console.print(f"    • [cyan]{mode.value}[/]")
     
-    console.print("\n[dim]For more info, see README_NEW.md[/]\n")
+    console.print("\n[dim]For more info, see README.md[/]\n")
 
 
 def generate_example_config():

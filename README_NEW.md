@@ -11,8 +11,8 @@ A powerful Python-based application for applying artistic dithering and pixeliza
 - 💻 **CLI Mode**: Batch processing with JSON configs, progress bars, and automation support
 
 ### Image & Video Processing
-- ✅ **Images**: PNG, JPG, JPEG, GIF, BMP support
-- ✅ **Videos**: MP4, AVI, MOV, MKV with audio preservation
+- ✅ **Images**
+- ✅ **Videos**
 - ✅ **Batch Processing**: Process entire folders with progress tracking
 - ✅ **Random Frame Preview**: Test settings on any video frame (GUI)
 - ✅ **Multi-core Processing**: Fast video rendering with multiprocessing
@@ -48,67 +48,34 @@ A powerful Python-based application for applying artistic dithering and pixeliza
 ## 📸 Screenshots
 
 ### Main Interface
-> **TODO: Screenshot of main window showing:**
-> - Left sidebar with all controls (pixelization settings, dithering options, color count)
-> - Main viewer showing a dithered image (use something colorful - landscape or character art)
-> - Status bar at bottom
-> - Window should show realistic size (1400x900)
 
-![Main Window](path/to/screenshot_main.png)
+[<img src="misc/main_window.png" alt="Main Window Screenshot" />](## "Screenshot of the main window")  
+
 
 ### Live Palette Preview
-> **TODO: Side-by-side comparison showing:**
-> - Left: Palette selection dialog (400x600) with radio buttons and color bars
-> - Right: Main window displaying the live preview at full size
-> - Arrow or annotation showing "Preview updates here instantly"
-> - Show 3-4 different palettes in the list (Median Cut, K-means, custom palette, etc.)
 
-![Live Preview Feature](path/to/screenshot_live_preview.png)
+[<img src="misc/live_palette_preview.mp4" alt="Live Preview Feature" />](## "Live Preview Feature")  
+
 
 ### Before/After Comparison Grid
-> **TODO: 2x2 or 3x3 grid showing:**
-> - Original image (top-left)
-> - Regular pixelization only (top-right)
-> - Neural pixelization only (bottom-left)
-> - Neural pixelization + dithering with custom palette (bottom-right)
-> - Use the same source image for all variations
-> - Labels on each image
 
-![Processing Comparison](path/to/screenshot_comparison.png)
+[<img src="misc/before_after_reg_neur.png" alt="Before/After Comparison Grid" />](## "Before/After Comparison Grid")  
 
-### Dithering Modes Showcase
-> **TODO: Grid showing the same image with different dithering algorithms:**
-> - Bayer (4x4)
-> - Error Diffusion (Floyd-Steinberg)
-> - Error Diffusion (Atkinson)
-> - Blue Noise
-> - Halftone
-> - Hybrid
-> - All using same palette (16 colors)
-> - 2x3 grid layout
-> - Labels showing mode name and variant
 
-![Dithering Algorithms](path/to/screenshot_dither_modes.png)
+### Dithering Modes and Palettes Showcase
+
+[<img src="misc/pallete_and_dither.png" alt="Dithering and Palettes Showcase" />](## "Dithering and Palettes Showcase")  
+
 
 ### Custom Palette Dialog
-> **TODO: Screenshot showing:**
-> - HSV color picker dialog with hue gradient bar
-> - Saturation-Value plane with selection circle
-> - RGB/HEX input fields
-> - Preview of selected color
-> - Show it in action (mid-use, not empty)
 
-![Custom Palette Creator](path/to/screenshot_palette_creator.png)
+[<img src="misc/pallete_dialogue.png" alt="Custom Palette Dialog />](## "Custom Palette Dialog")  
 
-### Video Processing
-> **TODO: Animated GIF or video showing:**
-> - Original video clip (3-5 seconds)
-> - Processed version with pixelization + dithering
-> - Side-by-side or before/after format
-> - Progress indicator visible if possible
-> - Use something with motion (person walking, car driving, etc.)
+### Video Processing Preview
 
-![Video Processing Demo](path/to/video_demo.gif)
+[<img src="misc/based_video_v.mp4" alt="Video Processing Preview" />](## "Video Processing Preview")  
+[<img src="misc/bo_video_v.mp4" alt="Video Processing Preview" />](## "Video Processing Preview")  
+[<img src="misc/hahaha_video.mp4" alt="Video Processing Preview" />](## "Video Processing Preview")  
 
 ---
 

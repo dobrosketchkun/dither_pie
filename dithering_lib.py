@@ -22,6 +22,7 @@ class DitherMode(Enum):
     ERROR_DIFFUSION = "error_diffusion"
     RIEMERSMA = "riemersma"
     BLUE_NOISE = "blue_noise"
+    INTERLEAVED_GRADIENT_NOISE = "IGN"
     POLKA_DOT = "polka_dot"
     WAVELET = "wavelet"
     ADAPTIVE_VARIANCE = "adaptive_variance"
@@ -221,6 +222,77 @@ class BlueNoiseDitherStrategy(MatrixDitherStrategy):
             'size': self.size,
             'seed': self.seed
         }
+
+
+class InterleavedGradientNoiseDitherStrategy(BaseDitherStrategy):
+    """
+    Interleaved Gradient Noise (IGN) dithering.
+    Generates deterministic per-pixel thresholds using pixel coordinates.
+    """
+
+    @staticmethod
+    def get_parameter_info():
+        """
+        Returns metadata about configurable parameters for this dithering mode.
+        """
+        return {
+            'scale': {
+                'type': 'float',
+                'default': 1.0,
+                'min': 0.1,
+                'max': 10.0,
+                'step': 0.1,
+                'label': 'Scale',
+                'description': 'Noise frequency (lower = larger pattern, higher = finer grain)'
+            },
+            'seed': {
+                'type': 'int',
+                'default': 0,
+                'min': 0,
+                'max': 9999,
+                'label': 'Seed',
+                'description': 'Deterministic offset to shift the pattern'
+            }
+        }
+
+    def __init__(self, scale: float = 1.0, seed: int = 0):
+        self.scale = float(scale)
+        self.seed = int(seed)
+
+    @staticmethod
+    def _fract(value: np.ndarray) -> np.ndarray:
+        return value - np.floor(value)
+
+    def _generate_thresholds(self, image_size: Tuple[int, int]) -> np.ndarray:
+        h, w = image_size
+        x = np.arange(w, dtype=np.float32)
+        y = np.arange(h, dtype=np.float32)
+        xv, yv = np.meshgrid(x, y)
+
+        # Classic IGN hash-style pattern in [0, 1)
+        xv = (xv + self.seed * 0.37) * self.scale
+        yv = (yv + self.seed * 0.73) * self.scale
+        t = self._fract(xv * 0.06711056 + yv * 0.00583715)
+        return self._fract(t * 52.9829189)
+
+    def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
+               image_size: Tuple[int, int]) -> np.ndarray:
+        h, w = image_size
+        tree = KDTree(palette_arr)
+
+        distances, indices = tree.query(pixels, k=2, workers=-1)
+        dist_sq = distances**2
+        dist_nearest = dist_sq[:, 0]
+        dist_second = dist_sq[:, 1]
+        total_dist = dist_nearest + dist_second
+        factor = np.where(total_dist == 0, 0.0, dist_nearest / total_dist)
+
+        thresholds = self._generate_thresholds((h, w)).flatten()
+        idx_nearest = indices[:, 0]
+        idx_second = indices[:, 1]
+        use_nearest = (factor <= thresholds)
+        final_indices = np.where(use_nearest, idx_nearest, idx_second).astype(np.int32)
+        return palette_arr[final_indices, :]
 
 
 # -------------------- Unified Error Diffusion Strategy --------------------
@@ -2487,6 +2559,8 @@ class ImageDitherer:
             return PolkaDotDitherStrategy.get_parameter_info()
         elif mode == DitherMode.BLUE_NOISE:
             return BlueNoiseDitherStrategy.get_parameter_info()
+        elif mode == DitherMode.INTERLEAVED_GRADIENT_NOISE:
+            return InterleavedGradientNoiseDitherStrategy.get_parameter_info()
         elif mode == DitherMode.WAVELET:
             return WaveletDitherStrategy.get_parameter_info()
         elif mode == DitherMode.ADAPTIVE_VARIANCE:
@@ -2520,6 +2594,11 @@ class ImageDitherer:
             settings = {key: info['default'] for key, info in params.items()}
             settings.update(self.dither_params)
             return BlueNoiseDitherStrategy(**settings)
+        elif mode == DitherMode.INTERLEAVED_GRADIENT_NOISE:
+            params = InterleavedGradientNoiseDitherStrategy.get_parameter_info()
+            settings = {key: info['default'] for key, info in params.items()}
+            settings.update(self.dither_params)
+            return InterleavedGradientNoiseDitherStrategy(**settings)
         elif mode == DitherMode.POLKA_DOT:
             # Polka dot with configurable parameters
             params = PolkaDotDitherStrategy.get_parameter_info()

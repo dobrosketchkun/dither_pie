@@ -184,6 +184,7 @@ Available in the `dithering.mode` field:
 | `bayer` | Ordered dithering | Fast, classic pixel art |
 | `error_diffusion` | Floyd-Steinberg and variants | High quality, gradients |
 | `blue_noise` | High-quality spatial | Smooth gradients |
+| `IGN` | Interleaved gradient noise | Fine grain noise |
 | `halftone` | Newspaper-style | Print effects |
 | `riemersma` | Hilbert curve-based | Line art, details |
 | `ostromoukhov` | Adaptive error diffusion | Natural images |
@@ -483,6 +484,19 @@ Some algorithms support parameters (e.g., Bayer matrix size):
 ```
 
 See `dithering_lib.py` for available parameters per algorithm.
+
+IGN parameters example:
+```json
+{
+    "dithering": {
+        "mode": "IGN",
+        "parameters": {
+            "scale": 1.0,
+            "seed": 0
+        }
+    }
+}
+```
 
 ### Environment Variables
 

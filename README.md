@@ -21,12 +21,13 @@ A powerful Python-based application for applying artistic dithering and pixeliza
 - **Regular**: Fast nearest-neighbor downsampling for classic pixel art
 - **Neural**: AI-powered artistic pixelization using PyTorch models
 
-### 12 Dithering Algorithms
+### 13 Dithering Algorithms
 - **Bayer** - Ordered dithering with configurable matrix size (2x2, 4x4, 8x8, 16x16)
 - **Error Diffusion** - 8 classic algorithms in one: Floyd-Steinberg, JJN, Stucki, Burkes, Atkinson, Sierra (3 variants)
 - **Ostromoukhov** - Adaptive error diffusion with variable coefficients
 - **Riemersma** - Hilbert curve-based space-filling error diffusion
 - **Blue Noise** - High-quality spatial distribution with configurable seed
+- **IGN (Interleaved Gradient Noise)** - Deterministic hash noise with configurable scale/seed
 - **Polka Dot** - Retro circular threshold patterns
 - **Halftone** - Newspaper-style printing simulation with rotating screens
 - **Wavelet** - Multi-scale frequency decomposition dithering

@@ -9,6 +9,8 @@ Routes to GUI or CLI mode based on command-line arguments:
 
 import sys
 
+__all__ = ['main']
+
 
 def main():
     """Main entry point - routes to GUI or CLI."""

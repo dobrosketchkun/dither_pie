@@ -9,6 +9,24 @@ from typing import List, Tuple, Dict, Optional
 from PIL import Image
 import numpy as np
 
+__all__ = [
+    # Functions
+    'load_palettes_from_file',
+    'save_palettes_to_file',
+    'hex_to_rgb',
+    'rgb_to_hex',
+    'palette_from_hex_list',
+    'import_lospec_palette',
+    'compute_even_dimensions',
+    'estimate_video_memory_usage',
+    'validate_video_file',
+    'validate_image_file',
+    'get_image_info',
+    'ensure_rgb',
+    # Classes
+    'PaletteManager',
+]
+
 
 def load_palettes_from_file(filepath: str = "palette.json") -> List[Dict]:
     """

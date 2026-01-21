@@ -15,7 +15,13 @@ from functools import partial
 import numpy as np
 from PIL import Image
 
-from dithering_lib import ImageDitherer
+from dithering_lib import ImageDitherer, PixelizeMethod
+
+__all__ = [
+    'VideoProcessor',
+    'NeuralPixelizer',
+    'pixelize_regular',
+]
 
 
 class VideoProcessor:
@@ -231,7 +237,7 @@ class VideoProcessor:
                 
                 processed_count = 0
                 
-                if pixelize_method == "neural":
+                if pixelize_method == PixelizeMethod.NEURAL.value or pixelize_method == "neural":
                     # Process sequentially in main thread to avoid reloading model
                     self._report_progress(0.1, f"Processing {total_frames} frames (neural mode: slower but higher quality)...")
                     
@@ -426,7 +432,7 @@ def _process_single_frame(frame_path: Path,
     Args:
         frame_path: Path to the frame image
         ditherer: ImageDitherer instance for dithering
-        pixelize_method: "neural" or "regular" or None for no pixelization
+        pixelize_method: PixelizeMethod value or string ("neural", "regular", None)
         max_size: Maximum size for pixelization
         final_resize_multiplier: Optional integer multiplier for final upscale
     
@@ -436,12 +442,15 @@ def _process_single_frame(frame_path: Path,
     try:
         img = Image.open(frame_path).convert('RGB')
         
-        # Pixelize if method provided
-        if pixelize_method == "neural":
+        # Pixelize if method provided (support both enum values and strings)
+        is_neural = pixelize_method == PixelizeMethod.NEURAL.value or pixelize_method == "neural"
+        is_regular = pixelize_method == PixelizeMethod.REGULAR.value or pixelize_method == "regular"
+        
+        if is_neural:
             # Use neural pixelization
             pixelizer = NeuralPixelizer()
             img = pixelizer.pixelize(img, max_size)
-        elif pixelize_method == "regular":
+        elif is_regular:
             # Use regular pixelization
             img = pixelize_regular(img, max_size)
         

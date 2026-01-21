@@ -22,11 +22,24 @@ from rich.panel import Panel
 from rich import print as rprint
 
 # Local imports
-from dithering_lib import DitherMode, ImageDitherer, ColorReducer
+from dithering_lib import DitherMode, ImageDitherer, ColorReducer, PixelizeMethod, PaletteSource
 from video_processor import VideoProcessor, NeuralPixelizer, pixelize_regular
 from utils import PaletteManager
 from config_manager import ConfigManager
 from PIL import Image
+
+__all__ = [
+    'main',
+    'setup_logging',
+    'CLIProgressCallback',
+    'ConfigValidationError',
+    'validate_config',
+    'load_config',
+    'detect_mode',
+    'process_single_image',
+    'process_single_video',
+    'process_folder',
+]
 
 
 # Initialize Rich console
@@ -163,10 +176,10 @@ class CLIProgressCallback:
 
 # ==================== Config Schema & Validation ====================
 
-# Valid values for config fields
+# Valid values for config fields (derived from enums for consistency)
 VALID_MODES = ["image", "video", "folder"]
-VALID_PIXELIZATION_METHODS = ["none", "regular", "neural"]
-VALID_PALETTE_SOURCES = ["median_cut", "kmeans", "uniform", "custom"]
+VALID_PIXELIZATION_METHODS = [method.value for method in PixelizeMethod]
+VALID_PALETTE_SOURCES = [source.value for source in PaletteSource]
 VALID_DITHER_MODES = [mode.value for mode in DitherMode]
 
 
@@ -305,20 +318,20 @@ def validate_config(config: Dict[str, Any], config_path: Path, skip_input_check:
     # Set defaults for optional fields
     config.setdefault("mode", None)  # Will be auto-detected
     config.setdefault("pixelization", {"enabled": False})
-    config.setdefault("dithering", {"enabled": True, "mode": "bayer", "parameters": {}})
-    config.setdefault("palette", {"source": "median_cut", "num_colors": 16, "use_gamma": False})
+    config.setdefault("dithering", {"enabled": True, "mode": DitherMode.BAYER.value, "parameters": {}})
+    config.setdefault("palette", {"source": PaletteSource.MEDIAN_CUT.value, "num_colors": 16, "use_gamma": False})
     config.setdefault("final_resize", {"enabled": False, "multiplier": 2})
     
     # Ensure nested defaults
     config["pixelization"].setdefault("enabled", False)
-    config["pixelization"].setdefault("method", "regular")
+    config["pixelization"].setdefault("method", PixelizeMethod.REGULAR.value)
     config["pixelization"].setdefault("max_size", 128)
     
     config["dithering"].setdefault("enabled", True)
     config["dithering"].setdefault("mode", "bayer")
     config["dithering"].setdefault("parameters", {})
     
-    config["palette"].setdefault("source", "median_cut")
+    config["palette"].setdefault("source", PaletteSource.MEDIAN_CUT.value)
     config["palette"].setdefault("num_colors", 16)
     config["palette"].setdefault("use_gamma", False)
     
@@ -401,15 +414,15 @@ def setup_palette_from_config(palette_config: Dict[str, Any], source_image: Imag
     is_custom_palette = False
     
     # Built-in palette generation methods (use num_colors from config)
-    if source == "median_cut":
+    if source == PaletteSource.MEDIAN_CUT.value:
         logger.info(f"Generating palette: [cyan]{source}[/] ({num_colors} colors)")
         palette = ColorReducer.reduce_colors(source_image, num_colors)
         
-    elif source == "kmeans":
+    elif source == PaletteSource.KMEANS.value:
         logger.info(f"Generating palette: [cyan]{source}[/] ({num_colors} colors)")
         palette = ColorReducer.generate_kmeans_palette(source_image, num_colors, random_state=42)
         
-    elif source == "uniform":
+    elif source == PaletteSource.UNIFORM.value:
         logger.info(f"Generating palette: [cyan]{source}[/] ({num_colors} colors)")
         palette = ColorReducer.generate_uniform_palette(num_colors)
         
@@ -495,14 +508,14 @@ def process_single_image(config: Dict[str, Any]) -> bool:
             method = config["pixelization"]["method"]
             max_size = config["pixelization"]["max_size"]
             
-            if method == "none":
+            if method == PixelizeMethod.NONE.value:
                 logger.info("Skipping pixelization")
                 processed_image = image
-            elif method == "regular":
+            elif method == PixelizeMethod.REGULAR.value:
                 logger.info(f"Pixelizing (regular, max_size={max_size})...")
                 processed_image = pixelize_regular(image, max_size)
                 logger.info(f"[green]✓[/] Pixelized to {processed_image.size[0]}x{processed_image.size[1]}")
-            elif method == "neural":
+            elif method == PixelizeMethod.NEURAL.value:
                 logger.info(f"Pixelizing (neural, max_size={max_size})... [dim](this may take a moment)[/]")
                 neural_pix = NeuralPixelizer()
                 processed_image = neural_pix.pixelize(image, max_size)
@@ -646,10 +659,10 @@ def process_single_video(config: Dict[str, Any], neural_pixelizer: Optional[Neur
             method = config["pixelization"]["method"]
             max_size = config["pixelization"]["max_size"]
             
-            if method == "regular":
-                pixelize_func = ("regular", max_size)
-            elif method == "neural":
-                pixelize_func = ("neural", max_size)
+            if method == PixelizeMethod.REGULAR.value:
+                pixelize_func = (PixelizeMethod.REGULAR.value, max_size)
+            elif method == PixelizeMethod.NEURAL.value:
+                pixelize_func = (PixelizeMethod.NEURAL.value, max_size)
                 # Pre-load neural pixelizer if not provided
                 if neural_pixelizer is None:
                     logger.info("Loading neural pixelization models...")
@@ -720,7 +733,7 @@ def generate_output_filename(input_path: Path, config: Dict[str, Any]) -> Path:
     # Add pixelization info if enabled
     if config["pixelization"]["enabled"]:
         method = config["pixelization"]["method"]
-        if method != "none":
+        if method != PixelizeMethod.NONE.value:
             parts.append(f"pix{config['pixelization']['max_size']}")
     
     # Add dithering info if enabled
@@ -732,13 +745,13 @@ def generate_output_filename(input_path: Path, config: Dict[str, Any]) -> Path:
         num_colors = config["palette"]["num_colors"]
         
         # Simplify palette source for filename
-        if palette_source == "median_cut":
+        if palette_source == PaletteSource.MEDIAN_CUT.value:
             parts.append(f"{num_colors}c")
-        elif palette_source == "kmeans":
+        elif palette_source == PaletteSource.KMEANS.value:
             parts.append(f"km{num_colors}c")
-        elif palette_source == "uniform":
+        elif palette_source == PaletteSource.UNIFORM.value:
             parts.append(f"uni{num_colors}c")
-        elif palette_source.startswith("file:"):
+        elif palette_source.startswith(f"{PaletteSource.FROM_FILE.value}:"):
             parts.append(f"{num_colors}c")
         else:
             # Custom palette name (cap at 10 chars)
@@ -809,7 +822,7 @@ def process_folder(config: Dict[str, Any]) -> bool:
         
         # Pre-load neural pixelizer if needed (for performance)
         neural_pixelizer = None
-        if config["pixelization"]["enabled"] and config["pixelization"]["method"] == "neural":
+        if config["pixelization"]["enabled"] and config["pixelization"]["method"] == PixelizeMethod.NEURAL.value:
             logger.info("Pre-loading neural pixelization models... [dim](one-time setup)[/]")
             try:
                 neural_pixelizer = NeuralPixelizer()
@@ -988,7 +1001,7 @@ def generate_example_config():
         "mode": "image",
         "pixelization": {
             "enabled": True,
-            "method": "regular",
+            "method": PixelizeMethod.REGULAR.value,
             "max_size": 128
         },
         "dithering": {
@@ -998,7 +1011,7 @@ def generate_example_config():
         },
         "palette": {
             "_comment_source": "Options: median_cut, kmeans, uniform, file:path.png, custom:palette_name, or direct palette name",
-            "source": "median_cut",
+            "source": PaletteSource.MEDIAN_CUT.value,
             "_comment_num_colors": "Ignored for custom/predefined palettes (uses palette's actual color count)",
             "num_colors": 16,
             "use_gamma": False

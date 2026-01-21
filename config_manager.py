@@ -8,6 +8,10 @@ import os
 from typing import Any, Optional, Dict
 from pathlib import Path
 
+__all__ = [
+    'ConfigManager',
+]
+
 
 class ConfigManager:
     """Manages application configuration and user preferences."""

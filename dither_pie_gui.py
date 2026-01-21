@@ -24,6 +24,7 @@ import numpy as np
 # Local imports
 from dithering_lib import (
     DitherMode,
+    PixelizeMethod,
     ImageDitherer,
     ColorReducer
 )
@@ -40,6 +41,11 @@ from utils import (
     validate_image_file
 )
 from config_manager import ConfigManager
+
+__all__ = [
+    'DitheringApp',
+    'launch_gui',
+]
 
 
 class DitheringApp(ctk.CTk):
@@ -72,7 +78,7 @@ class DitheringApp(ctk.CTk):
         self.is_video = False
         self.last_palette = None
         self.last_gamma = False  # Track gamma setting from last dithering operation
-        self.last_pixelization_method = "regular"
+        self.last_pixelization_method = PixelizeMethod.REGULAR
         self.display_state = "current"  # Track what we're showing: "current", "pixelized", "dithered"
         self.original_size = None  # Store original image/video size (width, height)
         
@@ -85,7 +91,7 @@ class DitheringApp(ctk.CTk):
         
         # Pixelization cache tracking
         self.pixelization_cache = {
-            "method": None,      # "regular" or "neural"
+            "method": None,      # PixelizeMethod enum value
             "max_size": None,    # The max_size parameter used
             "source_hash": None  # Hash of source image to detect changes
         }
@@ -126,7 +132,7 @@ class DitheringApp(ctk.CTk):
         sample = arr[::50, ::50].tobytes()  # Sample every 50th pixel
         return hashlib.md5((data + str(sample[:1000])).encode()).hexdigest()
     
-    def _is_pixelization_cached(self, method: str, max_size: int) -> bool:
+    def _is_pixelization_cached(self, method: PixelizeMethod, max_size: int) -> bool:
         """
         Check if we can reuse the cached pixelized image.
         Returns True if cache is valid, False if re-pixelization needed.
@@ -151,7 +157,7 @@ class DitheringApp(ctk.CTk):
         
         return True
     
-    def _update_pixelization_cache(self, method: str, max_size: int):
+    def _update_pixelization_cache(self, method: PixelizeMethod, max_size: int):
         """Update the pixelization cache after successful pixelization."""
         if self.current_image:
             self.pixelization_cache = {
@@ -693,9 +699,9 @@ class DitheringApp(ctk.CTk):
             return
         
         # Check if we can reuse cached result
-        if self._is_pixelization_cached("regular", max_size):
+        if self._is_pixelization_cached(PixelizeMethod.REGULAR, max_size):
             self.status_bar.set_status("✓ Using cached pixelization (no re-processing needed)")
-            self.last_pixelization_method = "regular"
+            self.last_pixelization_method = PixelizeMethod.REGULAR
             self.dithered_image = None
             self.display_state = "pixelized"
             self.image_viewer.set_image(self.pixelized_image, update=False)
@@ -707,12 +713,12 @@ class DitheringApp(ctk.CTk):
         # Use threading to prevent GUI freeze
         def process():
             self.pixelized_image = pixelize_regular(self.current_image, max_size)
-            self.last_pixelization_method = "regular"
+            self.last_pixelization_method = PixelizeMethod.REGULAR
             self.dithered_image = None
             self.display_state = "pixelized"
             
             # Update cache
-            self._update_pixelization_cache("regular", max_size)
+            self._update_pixelization_cache(PixelizeMethod.REGULAR, max_size)
             
             # Update GUI from main thread
             self.after(0, lambda: self.image_viewer.set_image(self.pixelized_image, update=False))
@@ -737,9 +743,9 @@ class DitheringApp(ctk.CTk):
             return
         
         # Check if we can reuse cached result
-        if self._is_pixelization_cached("neural", max_size):
+        if self._is_pixelization_cached(PixelizeMethod.NEURAL, max_size):
             self.status_bar.set_status("✓ Using cached neural pixelization (no re-processing needed)")
-            self.last_pixelization_method = "neural"
+            self.last_pixelization_method = PixelizeMethod.NEURAL
             self.dithered_image = None
             self.display_state = "pixelized"
             self.image_viewer.set_image(self.pixelized_image, update=False)
@@ -753,12 +759,12 @@ class DitheringApp(ctk.CTk):
                 self.neural_pix = NeuralPixelizer()
             
             self.pixelized_image = self.neural_pix.pixelize(self.current_image, max_size)
-            self.last_pixelization_method = "neural"
+            self.last_pixelization_method = PixelizeMethod.NEURAL
             self.dithered_image = None
             self.display_state = "pixelized"
             
             # Update cache
-            self._update_pixelization_cache("neural", max_size)
+            self._update_pixelization_cache(PixelizeMethod.NEURAL, max_size)
             
             self.after(0, lambda: self.image_viewer.set_image(self.pixelized_image, update=False))
             self.after(0, lambda: self.fit_to_window())
@@ -1325,12 +1331,12 @@ class DitheringApp(ctk.CTk):
             # Note: Can't use lambdas here due to multiprocessing pickle issues
             pixelize_func = None
             if self.pixelized_image:
-                if self.last_pixelization_method == "neural":
+                if self.last_pixelization_method == PixelizeMethod.NEURAL:
                     # Neural uses single-process mode (slower but prevents memory issues)
-                    pixelize_func = ("neural", max_size)
+                    pixelize_func = (PixelizeMethod.NEURAL.value, max_size)
                 else:
                     # Regular uses multi-process mode (fast)
-                    pixelize_func = ("regular", max_size)
+                    pixelize_func = (PixelizeMethod.REGULAR.value, max_size)
             
             # Get final resize parameters
             final_resize_enabled = self.final_resize_var.get()

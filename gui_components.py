@@ -13,6 +13,19 @@ from PIL import Image, ImageTk
 import numpy as np
 from typing import List, Tuple, Optional, Callable
 
+__all__ = [
+    'ZoomableImage',
+    'PalettePreview',
+    'ProgressDialog',
+    'ColorPickerGrid',
+    'StatusBar',
+    'ImageComparisonView',
+    'HSVColorPickerDialog',
+    'CustomPaletteCreator',
+    'PaletteImagePreviewDialog',
+    'DitherSettingsDialog',
+]
+
 
 class ZoomableImage(tk.Canvas):
     """

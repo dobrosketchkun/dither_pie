@@ -14,6 +14,13 @@ from sklearn.cluster import KMeans
 import pywt  # For wavelet-based dithering if needed
 import heapq
 
+try:
+    from numba import njit
+    _NUMBA_AVAILABLE = True
+except Exception:
+    njit = None
+    _NUMBA_AVAILABLE = False
+
 # -------------------- Public API --------------------
 
 __all__ = [
@@ -199,6 +206,93 @@ class ErrorDiffusionKernel:
         """List all available kernel names."""
         return ['floyd_steinberg', 'jjn', 'stucki', 'burkes', 'atkinson', 
                 'sierra', 'sierra_two_row', 'sierra_lite']
+
+
+if _NUMBA_AVAILABLE:
+    @njit(cache=True)
+    def _error_diffusion_numba(work_2d: np.ndarray,
+                               palette_arr: np.ndarray,
+                               offsets: np.ndarray,
+                               weights: np.ndarray,
+                               divisor: float,
+                               serpentine: bool) -> np.ndarray:
+        h = work_2d.shape[0]
+        w = work_2d.shape[1]
+        palette_len = palette_arr.shape[0]
+        offsets_len = offsets.shape[0]
+
+        for y in range(h):
+            if serpentine and (y % 2 == 1):
+                x_start = w - 1
+                x_end = -1
+                x_step = -1
+                x_direction = -1
+            else:
+                x_start = 0
+                x_end = w
+                x_step = 1
+                x_direction = 1
+
+            for x in range(x_start, x_end, x_step):
+                r = work_2d[y, x, 0]
+                g = work_2d[y, x, 1]
+                b = work_2d[y, x, 2]
+
+                best_idx = 0
+                best_dist = 1e20
+                for i in range(palette_len):
+                    dr = r - palette_arr[i, 0]
+                    dg = g - palette_arr[i, 1]
+                    db = b - palette_arr[i, 2]
+                    dist = dr * dr + dg * dg + db * db
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_idx = i
+
+                chosen0 = palette_arr[best_idx, 0]
+                chosen1 = palette_arr[best_idx, 1]
+                chosen2 = palette_arr[best_idx, 2]
+                work_2d[y, x, 0] = chosen0
+                work_2d[y, x, 1] = chosen1
+                work_2d[y, x, 2] = chosen2
+
+                err0 = r - chosen0
+                err1 = g - chosen1
+                err2 = b - chosen2
+
+                for k in range(offsets_len):
+                    nx = x + offsets[k, 0] * x_direction
+                    ny = y + offsets[k, 1]
+                    if 0 <= nx < w and 0 <= ny < h:
+                        wgt = weights[k] / divisor
+                        work_2d[ny, nx, 0] += err0 * wgt
+                        work_2d[ny, nx, 1] += err1 * wgt
+                        work_2d[ny, nx, 2] += err2 * wgt
+
+        for y in range(h):
+            for x in range(w):
+                v0 = work_2d[y, x, 0]
+                if v0 < 0.0:
+                    v0 = 0.0
+                elif v0 > 255.0:
+                    v0 = 255.0
+                work_2d[y, x, 0] = v0
+
+                v1 = work_2d[y, x, 1]
+                if v1 < 0.0:
+                    v1 = 0.0
+                elif v1 > 255.0:
+                    v1 = 255.0
+                work_2d[y, x, 1] = v1
+
+                v2 = work_2d[y, x, 2]
+                if v2 < 0.0:
+                    v2 = 0.0
+                elif v2 > 255.0:
+                    v2 = 255.0
+                work_2d[y, x, 2] = v2
+
+        return work_2d
 
 
 # -------------------- Base Classes for Dithering Strategies --------------------
@@ -523,11 +617,28 @@ class ErrorDiffusionDitherStrategy(BaseDitherStrategy):
                image_size: Tuple[int, int]) -> np.ndarray:
         h, w = image_size
         work_2d = pixels.reshape((h, w, 3)).astype(np.float32).copy()
-        tree = KDTree(palette_arr)
-        
         weights = self._kernel['weights']
         divisor = self._kernel['divisor']
-        
+
+        if _NUMBA_AVAILABLE:
+            try:
+                palette_f = palette_arr.astype(np.float32, copy=False)
+                offsets = np.array([(dx, dy) for dx, dy, _ in weights], dtype=np.int32)
+                weight_vals = np.array([wgt for _, _, wgt in weights], dtype=np.float32)
+                work_2d = _error_diffusion_numba(
+                    work_2d,
+                    palette_f,
+                    offsets,
+                    weight_vals,
+                    float(divisor),
+                    self.serpentine
+                )
+                return work_2d.reshape((-1, 3))
+            except Exception:
+                pass
+
+        tree = KDTree(palette_arr)
+
         for y in range(h):
             # Serpentine scanning: alternate row direction
             if self.serpentine and (y % 2 == 1):

@@ -237,6 +237,18 @@ if _NUMBA_AVAILABLE:
                 r = work_2d[y, x, 0]
                 g = work_2d[y, x, 1]
                 b = work_2d[y, x, 2]
+                if r < 0.0:
+                    r = 0.0
+                elif r > 255.0:
+                    r = 255.0
+                if g < 0.0:
+                    g = 0.0
+                elif g > 255.0:
+                    g = 255.0
+                if b < 0.0:
+                    b = 0.0
+                elif b > 255.0:
+                    b = 255.0
 
                 best_idx = 0
                 best_dist = 1e20
@@ -649,6 +661,8 @@ class ErrorDiffusionDitherStrategy(BaseDitherStrategy):
                 x_direction = 1
             
             for x in x_range:
+                # Clamp current pixel before palette lookup to avoid runaway drift
+                np.clip(work_2d[y, x], 0, 255, out=work_2d[y, x])
                 old_val = work_2d[y, x].copy()
                 
                 # Find nearest palette color
@@ -1093,6 +1107,20 @@ class HybridDitherStrategy(BaseDitherStrategy):
                image_size: Tuple[int, int]) -> np.ndarray:
         h, w = image_size
         work_2d = pixels.reshape((h, w, 3)).astype(np.float32).copy()
+        
+        if _NUMBA_AVAILABLE:
+            try:
+                palette_f = palette_arr.astype(np.float32, copy=False)
+                work_2d = _ostromoukhov_numba(
+                    work_2d,
+                    palette_f,
+                    _OSTRO_COEFFS,
+                    self.serpentine
+                )
+                return work_2d.reshape((-1, 3))
+            except Exception:
+                pass
+        
         tree = KDTree(palette_arr)
 
         for y in range(h):
@@ -1205,6 +1233,8 @@ class OstromoukhovDitherStrategy(BaseDitherStrategy):
                 x_direction = 1
             
             for x in x_range:
+                # Clamp current pixel before palette lookup to avoid runaway drift
+                np.clip(work_2d[y, x], 0, 255, out=work_2d[y, x])
                 old_val = work_2d[y, x].copy()
                 _, idx = tree.query(old_val, k=1)
                 chosen = palette_arr[idx]
@@ -1234,6 +1264,129 @@ class OstromoukhovDitherStrategy(BaseDitherStrategy):
         np.clip(work_2d, 0, 255, out=work_2d)
         return work_2d.reshape((-1, 3))
 
+
+# -------------------- Ostromoukhov Numba Core --------------------
+
+if _NUMBA_AVAILABLE:
+    _OSTRO_COEFFS = np.array(OstromoukhovDitherStrategy.COEFFS_TABLE, dtype=np.int32)
+    
+    @njit(cache=True)
+    def _ostromoukhov_numba(work_2d: np.ndarray,
+                            palette_arr: np.ndarray,
+                            coeffs: np.ndarray,
+                            serpentine: bool) -> np.ndarray:
+        h = work_2d.shape[0]
+        w = work_2d.shape[1]
+        palette_len = palette_arr.shape[0]
+        
+        for y in range(h):
+            if serpentine and (y % 2 == 1):
+                x_start = w - 1
+                x_end = -1
+                x_step = -1
+                x_direction = -1
+            else:
+                x_start = 0
+                x_end = w
+                x_step = 1
+                x_direction = 1
+            
+            for x in range(x_start, x_end, x_step):
+                r = work_2d[y, x, 0]
+                g = work_2d[y, x, 1]
+                b = work_2d[y, x, 2]
+                if r < 0.0:
+                    r = 0.0
+                elif r > 255.0:
+                    r = 255.0
+                if g < 0.0:
+                    g = 0.0
+                elif g > 255.0:
+                    g = 255.0
+                if b < 0.0:
+                    b = 0.0
+                elif b > 255.0:
+                    b = 255.0
+                
+                best_idx = 0
+                best_dist = 1e20
+                for i in range(palette_len):
+                    dr = r - palette_arr[i, 0]
+                    dg = g - palette_arr[i, 1]
+                    db = b - palette_arr[i, 2]
+                    dist = dr * dr + dg * dg + db * db
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_idx = i
+                
+                chosen0 = palette_arr[best_idx, 0]
+                chosen1 = palette_arr[best_idx, 1]
+                chosen2 = palette_arr[best_idx, 2]
+                work_2d[y, x, 0] = chosen0
+                work_2d[y, x, 1] = chosen1
+                work_2d[y, x, 2] = chosen2
+                
+                err0 = r - chosen0
+                err1 = g - chosen1
+                err2 = b - chosen2
+                
+                luminance = 0.299 * r + 0.587 * g + 0.114 * b
+                if luminance < 0.0:
+                    luminance = 0.0
+                elif luminance > 255.0:
+                    luminance = 255.0
+                intensity_idx = int(luminance)
+                c0 = coeffs[intensity_idx, 0]
+                c1 = coeffs[intensity_idx, 1]
+                c2 = coeffs[intensity_idx, 2]
+                divisor = c0 + c1 + c2
+                if divisor == 0:
+                    continue
+                
+                nx = x + x_direction
+                if 0 <= nx < w:
+                    wgt = c0 / divisor
+                    work_2d[y, nx, 0] += err0 * wgt
+                    work_2d[y, nx, 1] += err1 * wgt
+                    work_2d[y, nx, 2] += err2 * wgt
+                
+                if y + 1 < h:
+                    nx = x - x_direction
+                    if 0 <= nx < w:
+                        wgt = c1 / divisor
+                        work_2d[y + 1, nx, 0] += err0 * wgt
+                        work_2d[y + 1, nx, 1] += err1 * wgt
+                        work_2d[y + 1, nx, 2] += err2 * wgt
+                    
+                    wgt = c2 / divisor
+                    work_2d[y + 1, x, 0] += err0 * wgt
+                    work_2d[y + 1, x, 1] += err1 * wgt
+                    work_2d[y + 1, x, 2] += err2 * wgt
+        
+        for y in range(h):
+            for x in range(w):
+                v0 = work_2d[y, x, 0]
+                if v0 < 0.0:
+                    v0 = 0.0
+                elif v0 > 255.0:
+                    v0 = 255.0
+                work_2d[y, x, 0] = v0
+                
+                v1 = work_2d[y, x, 1]
+                if v1 < 0.0:
+                    v1 = 0.0
+                elif v1 > 255.0:
+                    v1 = 255.0
+                work_2d[y, x, 1] = v1
+                
+                v2 = work_2d[y, x, 2]
+                if v2 < 0.0:
+                    v2 = 0.0
+                elif v2 > 255.0:
+                    v2 = 255.0
+                work_2d[y, x, 2] = v2
+        
+        return work_2d
 
 # -------------------- Halftone Dithering --------------------
 

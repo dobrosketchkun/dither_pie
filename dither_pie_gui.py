@@ -515,13 +515,37 @@ class DitheringApp(ctk.CTk):
             
             # Get current values or use defaults
             current_values = self.dither_parameters.get(mode.value, {})
+            original_values = dict(current_values)
+            
+            def on_live_change(values):
+                # Update preview values without committing on cancel
+                self.dither_parameters[mode.value] = values
+                if self.palette_dialog_open and self.on_dither_mode_changed_callback:
+                    self.on_dither_mode_changed_callback()
+            
+            def on_cancel_settings():
+                # Restore original values on cancel
+                if original_values:
+                    self.dither_parameters[mode.value] = dict(original_values)
+                else:
+                    self.dither_parameters.pop(mode.value, None)
+                if self.palette_dialog_open and self.on_dither_mode_changed_callback:
+                    self.on_dither_mode_changed_callback()
+            
+            def on_apply_settings(values):
+                self.dither_parameters[mode.value] = values
+                if self.palette_dialog_open and self.on_dither_mode_changed_callback:
+                    self.on_dither_mode_changed_callback()
             
             # Open settings dialog
             dialog = DitherSettingsDialog(
                 self,
                 mode.value.capitalize(),
                 param_info,
-                current_values
+                current_values,
+                on_change=on_live_change,
+                on_cancel=on_cancel_settings,
+                on_apply=on_apply_settings
             )
             self.wait_window(dialog)
             

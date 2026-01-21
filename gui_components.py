@@ -788,7 +788,8 @@ class DitherSettingsDialog(ctk.CTkToplevel):
     Generic settings dialog for dithering mode parameters.
     Automatically builds UI based on parameter metadata.
     """
-    def __init__(self, parent, mode_name: str, parameter_info: dict, current_values: dict = None):
+    def __init__(self, parent, mode_name: str, parameter_info: dict,
+                 current_values: dict = None, on_change=None, on_cancel=None, on_apply=None):
         super().__init__(parent)
         self.title(f"{mode_name} Settings")
         self.geometry("450x600")
@@ -803,6 +804,10 @@ class DitherSettingsDialog(ctk.CTkToplevel):
         self.current_values = current_values or {}
         self.result_values = None
         self.widgets = {}
+        self.on_change = on_change
+        self.on_cancel_callback = on_cancel
+        self.on_apply_callback = on_apply
+        self._live_change_job = None
         
         # Title
         title = ctk.CTkLabel(
@@ -903,6 +908,8 @@ class DitherSettingsDialog(ctk.CTkToplevel):
         # Entry field
         entry = ctk.CTkEntry(frame, width=80)
         entry.insert(0, str(int(current_value)))
+        entry.bind("<KeyRelease>", lambda _e: self._schedule_live_change())
+        entry.bind("<FocusOut>", lambda _e: self._schedule_live_change())
         entry.pack(side='left', padx=(0, 10))
         
         # Range label
@@ -931,6 +938,8 @@ class DitherSettingsDialog(ctk.CTkToplevel):
         # Entry field
         entry = ctk.CTkEntry(frame, width=80)
         entry.insert(0, f"{current_value:.2f}")
+        entry.bind("<KeyRelease>", lambda _e: self._schedule_live_change())
+        entry.bind("<FocusOut>", lambda _e: self._schedule_live_change())
         entry.pack(side='left', padx=(0, 10))
         
         # Range label
@@ -957,7 +966,8 @@ class DitherSettingsDialog(ctk.CTkToplevel):
         menu = ctk.CTkOptionMenu(
             self.scroll_frame,
             variable=var,
-            values=choices
+            values=choices,
+            command=lambda _v: self._schedule_live_change()
         )
         menu.var = var
         
@@ -1010,15 +1020,38 @@ class DitherSettingsDialog(ctk.CTkToplevel):
                 widget.entry.insert(0, f"{default_value:.2f}")
             elif param_type == 'choice':
                 widget.var.set(default_value)
+        self._schedule_live_change()
+
+    def _schedule_live_change(self):
+        """Debounce live change notifications."""
+        if not self.on_change:
+            return
+        if self._live_change_job is not None:
+            self.after_cancel(self._live_change_job)
+        self._live_change_job = self.after(250, self._emit_live_change)
+
+    def _emit_live_change(self):
+        """Emit current parameter values for live preview."""
+        self._live_change_job = None
+        if not self.on_change:
+            return
+        current_values = {}
+        for param_name in self.parameter_info.keys():
+            current_values[param_name] = self._get_widget_value(param_name)
+        self.on_change(current_values)
     
     def on_apply(self):
         """Apply settings and close."""
         self.result_values = {}
         for param_name in self.parameter_info.keys():
             self.result_values[param_name] = self._get_widget_value(param_name)
+        if self.on_apply_callback:
+            self.on_apply_callback(self.result_values)
         self.destroy()
     
     def on_cancel(self):
         """Cancel and close."""
         self.result_values = None
+        if self.on_cancel_callback:
+            self.on_cancel_callback()
         self.destroy()

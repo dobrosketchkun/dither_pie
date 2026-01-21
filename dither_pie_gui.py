@@ -81,6 +81,7 @@ class DitheringApp(ctk.CTk):
         self.on_dither_mode_changed_callback = None  # Callback for dither mode changes during palette preview
         self.palette_showing_preview = True  # Track if showing preview (True) or original (False) during palette selection
         self.palette_original_image = None  # Store original image to restore during toggle
+        self.palette_preview_zoom_state = None  # (zoom, offset_x, offset_y) to preserve view on preview switch
         
         # Pixelization cache tracking
         self.pixelization_cache = {
@@ -840,7 +841,6 @@ class DitheringApp(ctk.CTk):
         preview_cache = OrderedDict()
         max_cache_size = 30
         is_generating = [False]  # Use list for mutable flag
-        first_preview = [True]  # Track if this is the first preview (to fit to window once)
         
         ctk.CTkLabel(dialog, text="Choose Palette:", 
                     font=("Arial", 14, "bold")).pack(pady=2)
@@ -991,35 +991,31 @@ class DitheringApp(ctk.CTk):
         def display_preview(preview_img):
             """
             Display preview in the MAIN image viewer.
-            Fits to window on first preview, then preserves zoom/pan on subsequent updates.
-            This allows user to zoom into a specific area and compare different palettes/gamma settings.
+            Preserve zoom/pan so the user's view doesn't reset while previewing palettes.
             """
             # Don't update display if user toggled to show original
             if not self.palette_showing_preview:
                 return
             
-            if first_preview[0]:
-                # First preview: fit to window for initial view
-                self.image_viewer.set_image(preview_img, update=False)
-                self.fit_to_window()
-                first_preview[0] = False
+            # Preserve zoom and pan position so the preview doesn't reset the view.
+            if self.palette_preview_zoom_state:
+                current_zoom, current_offset_x, current_offset_y = self.palette_preview_zoom_state
+                self.palette_preview_zoom_state = None
             else:
-                # Subsequent previews: preserve zoom and pan position
-                # This allows examining the same area when toggling gamma or switching palettes
                 current_zoom = self.image_viewer.zoom_factor
                 current_offset_x = self.image_viewer.offset_x
                 current_offset_y = self.image_viewer.offset_y
-                
-                # Update the image
-                self.image_viewer.original_image = preview_img
-                
-                # Restore zoom/pan state
-                self.image_viewer.zoom_factor = current_zoom
-                self.image_viewer.offset_x = current_offset_x
-                self.image_viewer.offset_y = current_offset_y
-                
-                # Redraw with preserved state
-                self.image_viewer.update_view()
+            
+            # Update the image
+            self.image_viewer.original_image = preview_img
+            
+            # Restore zoom/pan state
+            self.image_viewer.zoom_factor = current_zoom
+            self.image_viewer.offset_x = current_offset_x
+            self.image_viewer.offset_y = current_offset_y
+            
+            # Redraw with preserved state
+            self.image_viewer.update_view()
         
         def on_palette_selected(palette_name):
             """Callback when palette is selected - trigger preview generation."""
@@ -1173,6 +1169,7 @@ class DitheringApp(ctk.CTk):
             self.on_dither_mode_changed_callback = None
             self.palette_showing_preview = True
             self.palette_original_image = None
+            self.palette_preview_zoom_state = None
             
             self._update_resize_preview()
             dialog.destroy()
@@ -1183,8 +1180,15 @@ class DitheringApp(ctk.CTk):
             
             # Restore original display
             if original_displayed_image:
-                self.image_viewer.set_image(original_displayed_image, update=False)
-                self.fit_to_window()
+                current_zoom = self.image_viewer.zoom_factor
+                current_offset_x = self.image_viewer.offset_x
+                current_offset_y = self.image_viewer.offset_y
+                
+                self.image_viewer.original_image = original_displayed_image
+                self.image_viewer.zoom_factor = current_zoom
+                self.image_viewer.offset_x = current_offset_x
+                self.image_viewer.offset_y = current_offset_y
+                self.image_viewer.update_view()
             self.status_bar.set_status("Palette selection cancelled")
             
             # Re-enable controls before closing
@@ -1195,6 +1199,7 @@ class DitheringApp(ctk.CTk):
             self.on_dither_mode_changed_callback = None
             self.palette_showing_preview = True
             self.palette_original_image = None
+            self.palette_preview_zoom_state = None
             
             dialog.destroy()
         
@@ -1422,13 +1427,26 @@ class DitheringApp(ctk.CTk):
             if self.palette_showing_preview:
                 # Switch to original image
                 if self.palette_original_image:
-                    self.image_viewer.set_image(self.palette_original_image, update=False)
+                    current_zoom = self.image_viewer.zoom_factor
+                    current_offset_x = self.image_viewer.offset_x
+                    current_offset_y = self.image_viewer.offset_y
+                    
+                    self.image_viewer.original_image = self.palette_original_image
+                    self.image_viewer.zoom_factor = current_zoom
+                    self.image_viewer.offset_x = current_offset_x
+                    self.image_viewer.offset_y = current_offset_y
+                    self.image_viewer.update_view()
+                    
                     self.palette_showing_preview = False
-                    self.fit_to_window()
                     self.status_bar.set_status("Showing original (toggle to return to preview)")
             else:
                 # Switch back to preview - trigger regeneration
                 if self.on_dither_mode_changed_callback:
+                    self.palette_preview_zoom_state = (
+                        self.image_viewer.zoom_factor,
+                        self.image_viewer.offset_x,
+                        self.image_viewer.offset_y
+                    )
                     self.palette_showing_preview = True
                     self.on_dither_mode_changed_callback()
                     self.status_bar.set_status("Showing preview")
@@ -1436,33 +1454,58 @@ class DitheringApp(ctk.CTk):
         
         # Normal toggle behavior when palette dialog is not open
         if self.display_state == "current":
+            current_zoom = self.image_viewer.zoom_factor
+            current_offset_x = self.image_viewer.offset_x
+            current_offset_y = self.image_viewer.offset_y
             if self.pixelized_image:
-                self.image_viewer.set_image(self.pixelized_image, update=False)
+                self.image_viewer.original_image = self.pixelized_image
+                self.image_viewer.zoom_factor = current_zoom
+                self.image_viewer.offset_x = current_offset_x
+                self.image_viewer.offset_y = current_offset_y
+                self.image_viewer.update_view()
                 self.display_state = "pixelized"
-                self.fit_to_window()
             elif self.dithered_image:
                 # Skip directly to dithered if no pixelization step
-                self.image_viewer.set_image(self.dithered_image, update=False)
+                self.image_viewer.original_image = self.dithered_image
+                self.image_viewer.zoom_factor = current_zoom
+                self.image_viewer.offset_x = current_offset_x
+                self.image_viewer.offset_y = current_offset_y
+                self.image_viewer.update_view()
                 self.display_state = "dithered"
-                self.fit_to_window()
             else:
                 messagebox.showinfo("No Processed Image", "Please pixelize or apply dithering first.")
         elif self.display_state == "pixelized":
+            current_zoom = self.image_viewer.zoom_factor
+            current_offset_x = self.image_viewer.offset_x
+            current_offset_y = self.image_viewer.offset_y
             if self.dithered_image:
-                self.image_viewer.set_image(self.dithered_image, update=False)
+                self.image_viewer.original_image = self.dithered_image
+                self.image_viewer.zoom_factor = current_zoom
+                self.image_viewer.offset_x = current_offset_x
+                self.image_viewer.offset_y = current_offset_y
+                self.image_viewer.update_view()
                 self.display_state = "dithered"
-                self.fit_to_window()
             else:
                 messagebox.showinfo("No Dithered Image", "Please apply dithering first.")
         elif self.display_state == "dithered":
             # Go back to pixelized if it exists, otherwise go to current
+            current_zoom = self.image_viewer.zoom_factor
+            current_offset_x = self.image_viewer.offset_x
+            current_offset_y = self.image_viewer.offset_y
             if self.pixelized_image:
-                self.image_viewer.set_image(self.pixelized_image, update=False)
+                self.image_viewer.original_image = self.pixelized_image
+                self.image_viewer.zoom_factor = current_zoom
+                self.image_viewer.offset_x = current_offset_x
+                self.image_viewer.offset_y = current_offset_y
+                self.image_viewer.update_view()
                 self.display_state = "pixelized"
             else:
-                self.image_viewer.set_image(self.current_image, update=False)
+                self.image_viewer.original_image = self.current_image
+                self.image_viewer.zoom_factor = current_zoom
+                self.image_viewer.offset_x = current_offset_x
+                self.image_viewer.offset_y = current_offset_y
+                self.image_viewer.update_view()
                 self.display_state = "current"
-            self.fit_to_window()
     
     def _import_from_lospec(self, parent_dialog, refresh_callback):
         """Import palette from lospec.com URL."""

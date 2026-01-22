@@ -902,6 +902,20 @@ class DitheringApp(ctk.CTk):
         # Track currently displayed palette for gamma refresh
         current_palette_name = [None]
         current_palette_data = [None]
+        selected_var = tk.StringVar(value="Median Cut")
+        palette_options = []
+        
+        def get_selected_palette():
+            """Return (name, palette) for the currently selected radio option."""
+            try:
+                sel_name = selected_var.get()
+            except Exception:
+                sel_name = None
+            if sel_name:
+                for name, palette in palette_options:
+                    if name == sel_name:
+                        return name, palette
+            return None, None
         
         def save_dialog_size():
             """Save the current dialog size and position to config."""
@@ -930,7 +944,13 @@ class DitheringApp(ctk.CTk):
             preview_cache.clear()
             
             # Regenerate current preview if one is selected
-            if current_palette_name[0] and current_palette_data[0]:
+            palette_name, palette = get_selected_palette()
+            if palette_name and palette:
+                threading.Thread(
+                    target=lambda: generate_preview(palette_name, palette),
+                    daemon=True
+                ).start()
+            elif current_palette_name[0] and current_palette_data[0]:
                 threading.Thread(
                     target=lambda: generate_preview(current_palette_name[0], current_palette_data[0]),
                     daemon=True
@@ -940,7 +960,13 @@ class DitheringApp(ctk.CTk):
             """Regenerate preview when dither mode dropdown is changed."""
             # Cache is fine - dither mode is part of cache key
             # Just regenerate current preview if one is selected
-            if current_palette_name[0] and current_palette_data[0]:
+            palette_name, palette = get_selected_palette()
+            if palette_name and palette:
+                threading.Thread(
+                    target=lambda: generate_preview(palette_name, palette),
+                    daemon=True
+                ).start()
+            elif current_palette_name[0] and current_palette_data[0]:
                 threading.Thread(
                     target=lambda: generate_preview(current_palette_name[0], current_palette_data[0]),
                     daemon=True
@@ -1086,9 +1112,6 @@ class DitheringApp(ctk.CTk):
             return palette_options
         
         palette_options = generate_palette_options()
-        
-        # Radio buttons for selection
-        selected_var = tk.StringVar(value="Median Cut")
         
         scroll_frame = ctk.CTkScrollableFrame(dialog, height=350)
         scroll_frame.pack(fill="both", expand=True, padx=10, pady=5)

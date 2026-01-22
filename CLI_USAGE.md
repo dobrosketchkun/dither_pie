@@ -470,14 +470,14 @@ The GUI and CLI use the same underlying dithering library, so results are identi
 
 ### Custom Dithering Parameters
 
-Some algorithms support parameters (e.g., Bayer matrix size):
+Some algorithms support parameters (e.g., Bayer matrix selection):
 
 ```json
 {
     "dithering": {
         "mode": "bayer",
         "parameters": {
-            "matrix_size": 8
+            "size": "psx4x4"
         }
     }
 }

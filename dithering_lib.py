@@ -411,9 +411,9 @@ class BayerDitherStrategy(MatrixDitherStrategy):
             'size': {
                 'type': 'choice',
                 'default': '4x4',
-                'choices': ['2x2', '4x4', '8x8', '16x16'],
-                'label': 'Matrix Size',
-                'description': 'Size of the Bayer threshold matrix (larger = finer patterns)'
+                'choices': ['2x2', '4x4', '8x8', '16x16', 'psx4x4'],
+                'label': 'Matrix',
+                'description': 'Bayer matrix size or PSX 4x4 variant (larger = finer patterns)'
             }
         }
     
@@ -435,6 +435,8 @@ class BayerDitherStrategy(MatrixDitherStrategy):
             matrix = DitherUtils.BAYER8x8
         elif size == '16x16':
             matrix = DitherUtils.BAYER16x16
+        elif size in ('psx4x4', 'psx'):
+            matrix = DitherUtils.PSX4x4
         else:
             matrix = DitherUtils.BAYER4x4  # Default fallback
         
@@ -1639,6 +1641,13 @@ class DitherUtils:
          0.921875, 0.421875, 0.796875, 0.296875, 0.90625, 0.40625, 0.78125, 0.28125]
     ], dtype=np.float32)
 
+    PSX4x4 = np.array([
+        [0.0625, 0.5625, 0.1875, 0.6875],
+        [0.8125, 0.3125, 0.9375, 0.4375],
+        [0.1875, 0.6875, 0.0625, 0.5625],
+        [0.9375, 0.4375, 0.8125, 0.3125]
+    ], dtype=np.float32)
+
     @staticmethod
     def get_threshold_matrix(mode: DitherMode, size: str = '4x4') -> np.ndarray:
         """Get a threshold matrix for a given dithering mode."""
@@ -1649,7 +1658,9 @@ class DitherUtils:
                 '2x2': DitherUtils.BAYER2x2,
                 '4x4': DitherUtils.BAYER4x4,
                 '8x8': DitherUtils.BAYER8x8,
-                '16x16': DitherUtils.BAYER16x16
+                '16x16': DitherUtils.BAYER16x16,
+                'psx4x4': DitherUtils.PSX4x4,
+                'psx': DitherUtils.PSX4x4
             }
             return matrices.get(size, DitherUtils.BAYER4x4)
         else:

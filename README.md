@@ -393,7 +393,7 @@ Many dithering modes include adjustable parameters accessible via the **⚙️ s
 
 | Algorithm | Configurable Parameters | Description |
 |-----------|------------------------|-------------|
-| **Bayer** | Matrix Size | Choose 2x2, 4x4, 8x8, or 16x16 (default: 4x4) |
+| **Bayer** | Matrix | Choose 2x2, 4x4, 8x8, 16x16, or PSX 4x4 (default: 4x4) |
 | **Error Diffusion** | Variant, Serpentine Scan | 8 algorithms: Floyd-Steinberg, JJN, Stucki, Burkes, Atkinson, Sierra (3 variants). Toggle serpentine scanning for artifact reduction. |
 | **Ostromoukhov** | Serpentine Scan | Adaptive error diffusion with optional serpentine scanning |
 | **Blue Noise** | Matrix Size, Random Seed | Size (64-512), seed for reproducible patterns |

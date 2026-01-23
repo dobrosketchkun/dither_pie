@@ -166,6 +166,11 @@ class PixelizationEditorCanvas(ZoomableImage):
         self._drawing_occurred = False
         self._last_draw_cell = None
         self.on_color_pick = None
+        self.preview_grid_scale = 1.0
+        self.alt_zoom_active = False
+        self.preview_grid_offset_x = 0.0
+        self.preview_grid_offset_y = 0.0
+        self._last_pan_event = None
 
         self.bind("<ButtonPress-1>", self._on_left_down)
         self.bind("<B1-Motion>", self._on_left_drag)
@@ -186,6 +191,9 @@ class PixelizationEditorCanvas(ZoomableImage):
     def set_grid(self, grid_w: int, grid_h: int):
         self.grid_w = max(1, int(grid_w))
         self.grid_h = max(1, int(grid_h))
+        self.preview_grid_scale = 1.0
+        self.preview_grid_offset_x = 0.0
+        self.preview_grid_offset_y = 0.0
         if self.mode == "edit":
             self._ensure_pixel_data()
         self.update_view()
@@ -260,16 +268,23 @@ class PixelizationEditorCanvas(ZoomableImage):
         ch = self.winfo_height()
         if cw <= 1 or ch <= 1:
             return None
-        cell = min(cw / self.grid_w, ch / self.grid_h)
+        base_cell = min(cw / self.grid_w, ch / self.grid_h)
+        cell = base_cell * self.preview_grid_scale
+        if cell <= 0:
+            return None
         gw = self.grid_w * cell
         gh = self.grid_h * cell
-        x0 = (cw - gw) / 2
-        y0 = (ch - gh) / 2
+        x0 = (cw - gw) / 2 + self.preview_grid_offset_x
+        y0 = (ch - gh) / 2 + self.preview_grid_offset_y
         return x0, y0, gw, gh, cell
 
     def fit_image_to_grid(self):
         if not self.original_image:
             return
+        self.preview_grid_scale = 1.0
+        self.preview_grid_offset_x = 0.0
+        self.preview_grid_offset_y = 0.0
+        self._auto_fit_on_resize = True
         grid_rect = self._get_preview_grid_rect()
         if not grid_rect:
             return
@@ -286,6 +301,55 @@ class PixelizationEditorCanvas(ZoomableImage):
         target_y = y0 + (gh - nh) / 2
         self.offset_x = target_x - (cw - nw) / 2
         self.offset_y = target_y - (ch - nh) / 2
+        self.update_view()
+
+    @staticmethod
+    def _shift_down(event) -> bool:
+        if hasattr(event, "state"):
+            return bool(event.state & 0x0001)
+        return False
+
+    def start_pan(self, event):
+        self._last_pan_event = (event.x, event.y)
+        super().start_pan(event)
+
+    def pan(self, event):
+        if self.mode == "preview" and self._shift_down(event):
+            if self._last_pan_event:
+                dx = event.x - self._last_pan_event[0]
+                dy = event.y - self._last_pan_event[1]
+                self.preview_grid_offset_x += dx
+                self.preview_grid_offset_y += dy
+        self._last_pan_event = (event.x, event.y)
+        super().pan(event)
+
+    def on_resize(self, event):
+        if self._auto_fit_on_resize:
+            if self.mode == "preview":
+                self.fit_image_to_grid()
+            else:
+                self.fit_to_window()
+        else:
+            self.update_view()
+
+    def zoom(self, event):
+        if not self.original_image:
+            return
+        fine = False
+        if hasattr(event, "state"):
+            fine = bool(event.state & 0x0001)  # Shift key
+        step = 0.98 if fine else 0.9
+        grow = 1.02 if fine else 1.1
+        if event.num == 5 or (hasattr(event, 'delta') and event.delta < 0):
+            factor = step
+        else:
+            factor = grow
+        self.zoom_factor *= factor
+        self.zoom_factor = max(0.01, min(30.0, self.zoom_factor))
+        if self.alt_zoom_active and self.mode == "preview":
+            self.preview_grid_scale *= factor
+            self.preview_grid_scale = max(0.1, min(10.0, self.preview_grid_scale))
+        self._auto_fit_on_resize = False
         self.update_view()
 
     def _draw_overlays(self):
@@ -458,6 +522,7 @@ class PixelizationEditorCanvas(ZoomableImage):
 
     def _on_left_up(self, _event):
         if self.mode == "preview":
+            self._last_pan_event = None
             return
         if self._drawing_active:
             self._drawing_active = False
@@ -473,6 +538,7 @@ class PixelizationEditorCanvas(ZoomableImage):
         self.pan(event)
 
     def _on_right_up(self, _event):
+        self._last_pan_event = None
         return
 
     def _on_motion(self, event):
@@ -1979,6 +2045,7 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
             return
         if self._alt_pick_active:
             return
+        self.canvas.alt_zoom_active = True
         if self.canvas.tool == "picker":
             return
         self._alt_prev_tool = self.canvas.tool
@@ -1986,6 +2053,7 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
         self._set_tool("picker")
 
     def _on_alt_up(self, _event):
+        self.canvas.alt_zoom_active = False
         if not self._alt_pick_active:
             return
         self._alt_pick_active = False

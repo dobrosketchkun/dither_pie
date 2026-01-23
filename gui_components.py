@@ -6,6 +6,7 @@ Separated from main app for better maintainability.
 import os
 import json
 import colorsys
+import ctypes
 import threading
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, colorchooser
@@ -163,6 +164,7 @@ class PixelizationEditorCanvas(ZoomableImage):
         self.redo = []
         self._drawing_active = False
         self._drawing_occurred = False
+        self._last_draw_cell = None
         self.on_color_pick = None
 
         self.bind("<ButtonPress-1>", self._on_left_down)
@@ -434,6 +436,7 @@ class PixelizationEditorCanvas(ZoomableImage):
             self.update_view()
         else:
             self._drawing_active = True
+            self._last_draw_cell = cell
             self._apply_brush(cell)
             self._drawing_occurred = True
             self.update_view()
@@ -446,7 +449,10 @@ class PixelizationEditorCanvas(ZoomableImage):
             return
         cell = self._canvas_to_cell(event.x, event.y)
         if cell:
-            self._apply_brush(cell)
+            if self._last_draw_cell is None:
+                self._last_draw_cell = cell
+            self._apply_brush_line(self._last_draw_cell, cell)
+            self._last_draw_cell = cell
             self._drawing_occurred = True
             self.update_view()
 
@@ -455,6 +461,7 @@ class PixelizationEditorCanvas(ZoomableImage):
             return
         if self._drawing_active:
             self._drawing_active = False
+            self._last_draw_cell = None
             if self._drawing_occurred:
                 self._push_history()
                 self._drawing_occurred = False
@@ -489,6 +496,26 @@ class PixelizationEditorCanvas(ZoomableImage):
                 j = min(self.grid_h - 1, j0 + dj)
                 self.pixel_colors[j][i] = color
         self._update_image_from_pixels(preserve_view=True)
+
+    def _apply_brush_line(self, start: Tuple[int, int], end: Tuple[int, int]):
+        x0, y0 = start
+        x1, y1 = end
+        dx = abs(x1 - x0)
+        dy = abs(y1 - y0)
+        sx = 1 if x0 < x1 else -1
+        sy = 1 if y0 < y1 else -1
+        err = dx - dy
+        while True:
+            self._apply_brush((x0, y0))
+            if x0 == x1 and y0 == y1:
+                break
+            e2 = err * 2
+            if e2 > -dy:
+                err -= dy
+                x0 += sx
+            if e2 < dx:
+                err += dx
+                y0 += sy
 
     def _apply_magic_wand(self, cell: Tuple[int, int]):
         i0, j0 = cell
@@ -610,7 +637,6 @@ class ProgressDialog(ctk.CTkToplevel):
         self.geometry("500x150")
         self.resizable(False, False)
         
-        self.transient(parent)
         self.grab_set()
         
         # Center on parent
@@ -1512,10 +1538,16 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
         super().__init__(parent)
         self.title("Pixelization Editor")
         self.resizable(True, True)
+        self.minsize(900, 600)
         self.transient(parent)
         self.grab_set()
         self.lift()
         self.focus_force()
+        try:
+            self.attributes("-toolwindow", 0)
+        except tk.TclError:
+            pass
+        self.after(0, self._enable_maximize_box)
 
         self.config_mgr = config
         self.source_image = source_image.convert("RGBA")
@@ -1536,7 +1568,7 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
         self.grid_columnconfigure(1, weight=1)
         self.grid_rowconfigure(0, weight=1)
 
-        left = ctk.CTkFrame(self, width=280)
+        left = ctk.CTkFrame(self, width=240)
         left.grid(row=0, column=0, sticky="ns", padx=8, pady=8)
         left.grid_propagate(False)
 
@@ -1569,8 +1601,17 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
         self.target_size_entry.bind("<Return>", lambda _e: self._apply_target_size())
         self.target_size_entry.bind("<FocusOut>", lambda _e: self._apply_target_size())
 
-        self.grid_label = ctk.CTkLabel(left, text="Grid: -")
-        self.grid_label.pack(anchor="w", padx=12)
+        grid_row = ctk.CTkFrame(left, fg_color="transparent")
+        grid_row.pack(fill="x", padx=10, pady=(0, 6))
+        self.grid_label = ctk.CTkLabel(grid_row, text="Grid: -")
+        self.grid_label.pack(side="left")
+        self.fit_to_grid_button = ctk.CTkButton(
+            grid_row,
+            text="Fit to grid",
+            width=90,
+            command=self.canvas.fit_image_to_grid
+        )
+        self.fit_to_grid_button.pack(side="left", padx=8)
 
         # Convert section
         self._section_label(left, "Convert")
@@ -1711,6 +1752,23 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
             self.geometry(f"{w}x{h}+{x}+{y}")
         else:
             self.geometry(f"{w}x{h}")
+
+    def _enable_maximize_box(self):
+        if os.name != "nt":
+            return
+        try:
+            hwnd = ctypes.windll.user32.GetParent(self.winfo_id())
+            if not hwnd:
+                return
+            GWL_STYLE = -16
+            WS_MAXIMIZEBOX = 0x00010000
+            WS_THICKFRAME = 0x00040000
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
+            style |= WS_MAXIMIZEBOX | WS_THICKFRAME
+            ctypes.windll.user32.SetWindowLongW(hwnd, GWL_STYLE, style)
+            ctypes.windll.user32.SetWindowPos(hwnd, None, 0, 0, 0, 0, 0x0027)
+        except Exception:
+            return
 
     def _save_geometry(self):
         if not self.config_mgr:

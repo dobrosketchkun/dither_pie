@@ -286,7 +286,7 @@ class DitheringApp(ctk.CTk):
 
         self.btn_pixelize_editor = ctk.CTkButton(
             self.sidebar,
-            text="Pixelization Editor...",
+            text="Pixelization Editor",
             command=self._on_pixelization_editor
         )
         self.btn_pixelize_editor.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
@@ -478,7 +478,10 @@ class DitheringApp(ctk.CTk):
         self.random_frame_button.configure(state="normal")
         self.btn_pixelize.configure(state="normal")
         self.btn_pixelize_neural.configure(state="normal")
-        self.btn_pixelize_editor.configure(state="normal")
+        if self.is_video:
+            self.btn_pixelize_editor.configure(state="disabled")
+        else:
+            self.btn_pixelize_editor.configure(state="normal")
         self.btn_dither.configure(state="normal")
         self.apply_video_button.configure(state="normal")
         self.btn_save.configure(state="normal")
@@ -607,6 +610,7 @@ class DitheringApp(ctk.CTk):
             # Hide video buttons
             self.apply_video_button.grid_remove()
             self.random_frame_button.grid_remove()
+            self.btn_pixelize_editor.configure(state="normal")
             
             self.image_viewer.set_image(self.current_image, update=False)
             self.fit_to_window()
@@ -660,6 +664,7 @@ class DitheringApp(ctk.CTk):
             # Show video buttons
             self.apply_video_button.grid()
             self.random_frame_button.grid()
+            self.btn_pixelize_editor.configure(state="disabled")
             
             self.image_viewer.set_image(self.current_image, update=False)
             self.fit_to_window()

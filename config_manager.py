@@ -62,7 +62,7 @@ class ConfigManager:
         # Pixelization editor preferences
         "pixelization_editor": {
             "target_size": 64,
-            "conversion_method": "most",
+            "conversion_method": "neighbor",
             "tool": "brush",
             "tool_size": 1,
             "grid_visible": True,

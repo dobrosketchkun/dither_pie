@@ -45,6 +45,7 @@ class ZoomableImage(tk.Canvas):
         self.offset_y = 0
         self.pan_start_x = 0
         self.pan_start_y = 0
+        self._auto_fit_on_resize = True
 
         self.bind("<ButtonPress-1>", self.start_pan)
         self.bind("<B1-Motion>", self.pan)
@@ -66,6 +67,7 @@ class ZoomableImage(tk.Canvas):
         self.zoom_factor = 1.0
         self.offset_x = 0
         self.offset_y = 0
+        self._auto_fit_on_resize = True
         if update:
             self.update_view()
 
@@ -83,6 +85,7 @@ class ZoomableImage(tk.Canvas):
         self.zoom_factor = min(wr, hr)
         self.offset_x = 0
         self.offset_y = 0
+        self._auto_fit_on_resize = True
         self.update_view()
 
     def update_view(self):
@@ -107,25 +110,36 @@ class ZoomableImage(tk.Canvas):
     def start_pan(self, event):
         self.pan_start_x = event.x - self.offset_x
         self.pan_start_y = event.y - self.offset_y
+        self._auto_fit_on_resize = False
 
     def pan(self, event):
         self.offset_x = event.x - self.pan_start_x
         self.offset_y = event.y - self.pan_start_y
+        self._auto_fit_on_resize = False
         self.update_view()
 
     def zoom(self, event):
         if not self.original_image:
             return
+        fine = False
+        if hasattr(event, "state"):
+            fine = bool(event.state & 0x0001)  # Shift key
+        step = 0.98 if fine else 0.9
+        grow = 1.02 if fine else 1.1
         # Zoom out on negative delta or Button-5
         if event.num == 5 or (hasattr(event, 'delta') and event.delta < 0):
-            self.zoom_factor *= 0.9
+            self.zoom_factor *= step
         else:
-            self.zoom_factor *= 1.1
+            self.zoom_factor *= grow
         self.zoom_factor = max(0.01, min(30.0, self.zoom_factor))
+        self._auto_fit_on_resize = False
         self.update_view()
 
     def on_resize(self, event):
-        self.fit_to_window()
+        if self._auto_fit_on_resize:
+            self.fit_to_window()
+        else:
+            self.update_view()
 
 
 class PixelizationEditorCanvas(ZoomableImage):
@@ -134,11 +148,12 @@ class PixelizationEditorCanvas(ZoomableImage):
     """
     def __init__(self, master, **kwargs):
         super().__init__(master, **kwargs)
+        self.source_image = None
         self.grid_w = 1
         self.grid_h = 1
         self.show_grid = True
         self.mode = "preview"  # "preview" or "edit"
-        self.tool = "brush"  # "brush", "eraser", "magic"
+        self.tool = "brush"  # "brush", "magic", "picker"
         self.tool_size = 1
         self.magic_threshold = 5
         self.draw_color = (0, 0, 0)
@@ -148,6 +163,7 @@ class PixelizationEditorCanvas(ZoomableImage):
         self.redo = []
         self._drawing_active = False
         self._drawing_occurred = False
+        self.on_color_pick = None
 
         self.bind("<ButtonPress-1>", self._on_left_down)
         self.bind("<B1-Motion>", self._on_left_drag)
@@ -161,6 +177,9 @@ class PixelizationEditorCanvas(ZoomableImage):
         self.mode = mode
         self.highlight_cell = None
         self.update_view()
+
+    def set_source_image(self, image: Image.Image):
+        self.source_image = image
 
     def set_grid(self, grid_w: int, grid_h: int):
         self.grid_w = max(1, int(grid_w))
@@ -234,6 +253,39 @@ class PixelizationEditorCanvas(ZoomableImage):
         x, y, _, _ = rect
         return x, y, self.zoom_factor
 
+    def _get_preview_grid_rect(self) -> Optional[Tuple[float, float, float, float, float]]:
+        cw = self.winfo_width()
+        ch = self.winfo_height()
+        if cw <= 1 or ch <= 1:
+            return None
+        cell = min(cw / self.grid_w, ch / self.grid_h)
+        gw = self.grid_w * cell
+        gh = self.grid_h * cell
+        x0 = (cw - gw) / 2
+        y0 = (ch - gh) / 2
+        return x0, y0, gw, gh, cell
+
+    def fit_image_to_grid(self):
+        if not self.original_image:
+            return
+        grid_rect = self._get_preview_grid_rect()
+        if not grid_rect:
+            return
+        x0, y0, gw, gh, _ = grid_rect
+        iw, ih = self.original_image.size
+        if iw == 0 or ih == 0:
+            return
+        self.zoom_factor = min(gw / iw, gh / ih)
+        nw = iw * self.zoom_factor
+        nh = ih * self.zoom_factor
+        cw = self.winfo_width()
+        ch = self.winfo_height()
+        target_x = x0 + (gw - nw) / 2
+        target_y = y0 + (gh - nh) / 2
+        self.offset_x = target_x - (cw - nw) / 2
+        self.offset_y = target_y - (ch - nh) / 2
+        self.update_view()
+
     def _draw_overlays(self):
         self.delete("grid")
         self.delete("highlight")
@@ -248,20 +300,19 @@ class PixelizationEditorCanvas(ZoomableImage):
     def _draw_preview_grid(self):
         if not self.show_grid:
             return
-        cw = self.winfo_width()
-        ch = self.winfo_height()
-        if cw <= 1 or ch <= 1:
+        grid_rect = self._get_preview_grid_rect()
+        if not grid_rect:
             return
-        cell_w = cw / self.grid_w
-        cell_h = ch / self.grid_h
+        x0, y0, nw, nh, cell_w = grid_rect
+        cell_h = cell_w
         if min(cell_w, cell_h) < 3:
             return
         for i in range(1, self.grid_w):
-            x = i * cell_w
-            self.create_line(x, 0, x, ch, fill="#ffffff", width=1, tags="grid", stipple="gray50")
+            x = x0 + i * cell_w
+            self.create_line(x, y0, x, y0 + nh, fill="#ffffff", width=1, tags="grid", stipple="gray50")
         for j in range(1, self.grid_h):
-            y = j * cell_h
-            self.create_line(0, y, cw, y, fill="#ffffff", width=1, tags="grid", stipple="gray50")
+            y = y0 + j * cell_h
+            self.create_line(x0, y, x0 + nw, y, fill="#ffffff", width=1, tags="grid", stipple="gray50")
 
     def _draw_edit_grid(self):
         if not self.show_grid:
@@ -286,6 +337,8 @@ class PixelizationEditorCanvas(ZoomableImage):
             return
         rect = self._get_image_draw_rect()
         if not rect:
+            return
+        if self.tool == "picker":
             return
         x0, y0, _, _ = rect
         i, j = self.highlight_cell
@@ -361,11 +414,19 @@ class PixelizationEditorCanvas(ZoomableImage):
 
     def _on_left_down(self, event):
         if self.mode == "preview":
+            if self.tool == "picker":
+                self._pick_color_at_canvas(event.x, event.y)
+                self.update_view()
+                return
             self.start_pan(event)
             return
         self._ensure_pixel_data()
         cell = self._canvas_to_cell(event.x, event.y)
         if not cell:
+            return
+        if self.tool == "picker":
+            self._pick_color_at_canvas(event.x, event.y)
+            self.update_view()
             return
         if self.tool == "magic":
             self._apply_magic_wand(cell)
@@ -417,7 +478,10 @@ class PixelizationEditorCanvas(ZoomableImage):
 
     def _apply_brush(self, cell: Tuple[int, int]):
         i0, j0 = cell
-        color = self.draw_color if self.tool == "brush" else None
+        if self.tool == "brush":
+            color = self.draw_color
+        else:
+            return
         size = self.tool_size
         for dj in range(size):
             for di in range(size):
@@ -427,10 +491,36 @@ class PixelizationEditorCanvas(ZoomableImage):
         self._update_image_from_pixels(preserve_view=True)
 
     def _apply_magic_wand(self, cell: Tuple[int, int]):
+        i0, j0 = cell
+        size = max(1, int(self.tool_size))
+        start_i = min(self.grid_w - 1, i0)
+        start_j = min(self.grid_h - 1, j0)
+        end_i = min(self.grid_w - 1, i0 + size - 1)
+        end_j = min(self.grid_h - 1, j0 + size - 1)
+        targets = []
+        for j in range(start_j, end_j + 1):
+            for i in range(start_i, end_i + 1):
+                color = self.pixel_colors[j][i]
+                if color is None:
+                    continue
+                if color not in targets:
+                    targets.append(color)
+        for target in targets:
+            start_cell = self._find_cell_with_color(start_i, start_j, end_i, end_j, target)
+            if start_cell:
+                self._flood_fill_from(start_cell, target)
+        self._update_image_from_pixels(preserve_view=True)
+
+    def _find_cell_with_color(self, start_i, start_j, end_i, end_j, target):
+        for j in range(start_j, end_j + 1):
+            for i in range(start_i, end_i + 1):
+                color = self.pixel_colors[j][i]
+                if color is not None and color == target:
+                    return (i, j)
+        return None
+
+    def _flood_fill_from(self, cell: Tuple[int, int], target: Tuple[int, int, int]):
         i, j = cell
-        target = self.pixel_colors[j][i]
-        if target is None:
-            return
         threshold = self.magic_threshold
         stack = [(i, j)]
         visited = set()
@@ -451,7 +541,28 @@ class PixelizationEditorCanvas(ZoomableImage):
                 (ci - 1, cj), (ci + 1, cj),
                 (ci, cj - 1), (ci, cj + 1)
             ])
-        self._update_image_from_pixels(preserve_view=True)
+
+    def _pick_color_at_canvas(self, x: float, y: float):
+        color = None
+        if self.mode == "edit" and self.pixel_colors:
+            cell = self._canvas_to_cell(x, y)
+            if cell:
+                i, j = cell
+                color = self.pixel_colors[j][i]
+        if color is None and self.source_image is not None:
+            transform = self._get_image_transform()
+            if transform:
+                origin_x, origin_y, scale = transform
+                ox = int((x - origin_x) / scale)
+                oy = int((y - origin_y) / scale)
+                ox = max(0, min(self.source_image.width - 1, ox))
+                oy = max(0, min(self.source_image.height - 1, oy))
+                color = self.source_image.getpixel((ox, oy))[:3]
+        if color is None:
+            return
+        self.draw_color = color
+        if self.on_color_pick:
+            self.on_color_pick(color)
 
     @staticmethod
     def _color_distance(c1: Tuple[int, int, int], c2: Tuple[int, int, int]) -> float:
@@ -1411,6 +1522,8 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
         self.result_image = None
         self.grid_w = 1
         self.grid_h = 1
+        self._alt_pick_active = False
+        self._alt_prev_tool = None
 
         self._build_ui()
         self._load_geometry()
@@ -1436,6 +1549,7 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
             right, bg="gray20", highlightthickness=0
         )
         self.canvas.grid(row=0, column=0, sticky="nsew")
+        self.canvas.set_source_image(self.source_image)
         self.canvas.set_image(self.source_image, update=False)
         self.canvas.fit_to_window()
         self.canvas.set_mode("preview")
@@ -1460,27 +1574,12 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
 
         # Convert section
         self._section_label(left, "Convert")
-        method_values = ["most", "most_light", "most_dark", "average", "neighbor"]
-        default_method = "most"
-        if self.config_mgr:
-            default_method = self.config_mgr.get("pixelization_editor", "conversion_method", default="most")
-        self.method_var = tk.StringVar(value=default_method)
-        self.method_menu = ctk.CTkOptionMenu(
-            left,
-            variable=self.method_var,
-            values=method_values
-        )
-        self.method_menu.pack(fill="x", padx=10, pady=(4, 6))
-
         self.convert_button = ctk.CTkButton(
             left,
-            text="Convert",
+            text="Pixelize",
             command=self._start_conversion
         )
-        self.convert_button.pack(fill="x", padx=10, pady=(0, 8))
-
-        self.status_label = ctk.CTkLabel(left, text="")
-        self.status_label.pack(anchor="w", padx=12, pady=(0, 8))
+        self.convert_button.pack(fill="x", padx=10, pady=(4, 10))
 
         # Edit section
         self._section_label(left, "Edit")
@@ -1489,35 +1588,41 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
 
         self.tool_buttons = {}
         self.tool_buttons["brush"] = ctk.CTkButton(
-            tool_frame, text="B", width=28, height=28,
+            tool_frame, text="Brush", width=70, height=28,
             command=lambda: self._set_tool("brush")
         )
         self.tool_buttons["brush"].pack(side="left", padx=2)
-        self.tool_buttons["eraser"] = ctk.CTkButton(
-            tool_frame, text="E", width=28, height=28,
-            command=lambda: self._set_tool("eraser")
-        )
-        self.tool_buttons["eraser"].pack(side="left", padx=2)
         self.tool_buttons["magic"] = ctk.CTkButton(
-            tool_frame, text="W", width=28, height=28,
+            tool_frame, text="Wand", width=70, height=28,
             command=lambda: self._set_tool("magic")
         )
         self.tool_buttons["magic"].pack(side="left", padx=2)
+        self.tool_buttons["picker"] = ctk.CTkButton(
+            tool_frame, text="Pick", width=70, height=28,
+            command=lambda: self._set_tool("picker")
+        )
+        self.tool_buttons["picker"].pack(side="left", padx=2)
+        self._tool_default_fg = {
+            name: btn.cget("fg_color")
+            for name, btn in self.tool_buttons.items()
+        }
 
         size_frame = ctk.CTkFrame(left, fg_color="transparent")
         size_frame.pack(fill="x", padx=10, pady=(0, 6))
         ctk.CTkLabel(size_frame, text="Tool size:").pack(side="left")
-        size_values = ["1", "2", "3", "4", "5"]
         self.tool_size_var = tk.StringVar(
             value=str(self._get_config_value("tool_size", 1))
         )
-        self.tool_size_menu = ctk.CTkOptionMenu(
+        self.tool_size_entry = tk.Spinbox(
             size_frame,
-            variable=self.tool_size_var,
-            values=size_values,
-            command=lambda _v: self._apply_tool_size()
+            from_=1,
+            to=9999,
+            width=6,
+            textvariable=self.tool_size_var,
+            command=self._apply_tool_size
         )
-        self.tool_size_menu.pack(side="left", padx=6)
+        self.tool_size_entry.pack(side="left", padx=6)
+        self.tool_size_entry.bind("<KeyRelease>", lambda _e: self._apply_tool_size())
 
         color_frame = ctk.CTkFrame(left, fg_color="transparent")
         color_frame.pack(fill="x", padx=10, pady=(0, 6))
@@ -1546,6 +1651,9 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
         self.magic_threshold = tk.IntVar(
             value=self._get_config_value("magic_wand_threshold", 5)
         )
+        self.magic_label = ctk.CTkLabel(left, text=f"Wand threshold: {self.magic_threshold.get()}")
+        self.magic_label.pack(anchor="w", padx=10, pady=(0, 2))
+        self._magic_label_color = self.magic_label.cget("text_color")
         self.magic_slider = ctk.CTkSlider(
             left,
             from_=0,
@@ -1576,7 +1684,11 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
         self.apply_button.pack(side="left", expand=True, fill="x", padx=2)
 
         self._set_edit_controls_state(False)
-        self._set_tool(self._get_config_value("tool", "brush"))
+        tool = self._get_config_value("tool", "brush")
+        if tool not in self.tool_buttons:
+            tool = "brush"
+        self._set_tool(tool)
+        self._bind_shortcuts()
 
     def _section_label(self, parent, text: str):
         label = ctk.CTkLabel(parent, text=text, font=("Arial", 12, "bold"))
@@ -1635,7 +1747,8 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
         self.canvas.set_mode("preview")
         self.canvas.set_show_grid(True)
         self.canvas.set_image(self.source_image, update=False)
-        self.canvas.fit_to_window()
+        self.canvas.update_idletasks()
+        self.canvas.fit_image_to_grid()
 
     def _set_tool(self, tool: str):
         self.canvas.set_tool(tool)
@@ -1643,7 +1756,13 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
             if name == tool:
                 btn.configure(fg_color="#2d7ff9")
             else:
-                btn.configure(fg_color="transparent")
+                btn.configure(fg_color=self._tool_default_fg.get(name))
+        if tool == "magic":
+            self.magic_slider.configure(state="normal")
+            self.magic_label.configure(text_color=self._magic_label_color)
+        else:
+            self.magic_slider.configure(state="disabled")
+            self.magic_label.configure(text_color="gray")
         if self.config_mgr:
             self.config_mgr.set("pixelization_editor", "tool", value=tool)
 
@@ -1651,6 +1770,8 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
         try:
             size = int(self.tool_size_var.get())
         except ValueError:
+            size = 1
+        if size <= 0:
             size = 1
         self.canvas.set_tool_size(size)
         if self.config_mgr:
@@ -1682,6 +1803,7 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
     def _apply_magic_threshold(self, value):
         self.magic_threshold.set(int(value))
         self.canvas.set_magic_threshold(self.magic_threshold.get())
+        self.magic_label.configure(text=f"Wand threshold: {self.magic_threshold.get()}")
         if self.config_mgr:
             self.config_mgr.set(
                 "pixelization_editor",
@@ -1693,9 +1815,9 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
         state = "normal" if enabled else "disabled"
         widgets = [
             self.tool_buttons["brush"],
-            self.tool_buttons["eraser"],
             self.tool_buttons["magic"],
-            self.tool_size_menu,
+            self.tool_buttons["picker"],
+            self.tool_size_entry,
             self.color_button,
             self.grid_toggle,
             self.magic_slider,
@@ -1705,180 +1827,113 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
         ]
         for w in widgets:
             w.configure(state=state)
+        if enabled:
+            self._set_tool(self.canvas.tool)
 
     def _start_conversion(self):
-        self.status_label.configure(text="Converting...")
-        self.convert_button.configure(state="disabled")
+        self.convert_button.configure(state="disabled", text="Pixelizing...")
         threading.Thread(target=self._convert, daemon=True).start()
 
     def _convert(self):
-        method = self.method_var.get()
+        rect = self.canvas._get_image_draw_rect()
+        if not rect:
+            self.after(0, lambda: self._conversion_done(None, "No image to convert."))
+            return
         transform = self.canvas._get_image_transform()
         if not transform:
             self.after(0, lambda: self._conversion_done(None, "No image to convert."))
             return
+        grid_rect = self.canvas._get_preview_grid_rect()
+        if not grid_rect:
+            self.after(0, lambda: self._conversion_done(None, "Grid not ready yet."))
+            return
         origin_x, origin_y, scale = transform
-        self.canvas.update_idletasks()
-        cw = max(1, self.canvas.winfo_width())
-        ch = max(1, self.canvas.winfo_height())
-        cell_w = cw / self.grid_w
-        cell_h = ch / self.grid_h
+        grid_x, grid_y, _, _, cell = grid_rect
         img_arr = np.array(self.source_image)
         img_h, img_w = img_arr.shape[0], img_arr.shape[1]
+        has_alpha = img_arr.shape[2] == 4
         pixels = [[None for _ in range(self.grid_w)] for _ in range(self.grid_h)]
         for j in range(self.grid_h):
             for i in range(self.grid_w):
-                cx0 = i * cell_w
-                cy0 = j * cell_h
-                cx1 = cx0 + cell_w
-                cy1 = cy0 + cell_h
-                if method == "neighbor":
-                    cx0 -= cell_w * 0.25
-                    cy0 -= cell_h * 0.25
-                    cx1 += cell_w * 0.25
-                    cy1 += cell_h * 0.25
-                ox0 = (cx0 - origin_x) / scale
-                oy0 = (cy0 - origin_y) / scale
-                ox1 = (cx1 - origin_x) / scale
-                oy1 = (cy1 - origin_y) / scale
-                rx0 = max(0, int(np.floor(ox0)))
-                ry0 = max(0, int(np.floor(oy0)))
-                rx1 = min(img_w, int(np.ceil(ox1)))
-                ry1 = min(img_h, int(np.ceil(oy1)))
-                if rx1 <= rx0 or ry1 <= ry0:
+                cx = grid_x + (i + 0.5) * cell
+                cy = grid_y + (j + 0.5) * cell
+                ox = int(round((cx - origin_x) / scale))
+                oy = int(round((cy - origin_y) / scale))
+                if ox < 0 or oy < 0 or ox >= img_w or oy >= img_h:
                     continue
-                region = img_arr[ry0:ry1, rx0:rx1]
-                color = self._representative_color(region, method)
-                pixels[j][i] = color
-        self.after(0, lambda: self._conversion_done(pixels, "Conversion complete."))
+                if has_alpha and img_arr[oy, ox, 3] == 0:
+                    continue
+                r, g, b = img_arr[oy, ox, 0:3]
+                pixels[j][i] = (int(r), int(g), int(b))
+        self.after(0, lambda: self._conversion_done(pixels, None))
 
-    def _conversion_done(self, pixels, message: str):
+    def _conversion_done(self, pixels, _message):
         if pixels is None:
-            self.status_label.configure(text=message)
-            self.convert_button.configure(state="normal")
+            self.convert_button.configure(state="normal", text="Pixelize")
             return
         self.canvas.set_pixel_data(pixels)
         self.canvas.set_mode("edit")
         self.canvas.set_show_grid(self.grid_toggle_var.get())
         self._apply_tool_size()
         self.canvas.set_magic_threshold(self.magic_threshold.get())
+        self.canvas.on_color_pick = self._on_color_picked
         self._set_edit_controls_state(True)
-        self.status_label.configure(text=message)
-        self.convert_button.configure(state="normal")
+        self.convert_button.configure(state="normal", text="Pixelize")
         if self.config_mgr:
-            self.config_mgr.set("pixelization_editor", "conversion_method", value=self.method_var.get())
+            self.config_mgr.set("pixelization_editor", "conversion_method", value="neighbor")
 
-    def _representative_color(self, region, method: str) -> Optional[Tuple[int, int, int]]:
-        if region.size == 0:
-            return None
-        if region.shape[2] == 4:
-            alpha = region[:, :, 3]
-            region = region[alpha > 0]
-        if region.size == 0:
-            return None
-        colors = region.reshape(-1, region.shape[-1])[:, :3]
-        if method == "average":
-            mean = colors.mean(axis=0)
-            return tuple(int(round(v)) for v in mean)
-        if method == "neighbor":
-            mean = colors.mean(axis=0)
-            return tuple(int(round(v)) for v in mean)
-        if method == "most":
-            return self._most_used_color(colors, threshold=30)
-        if method in ("most_light", "most_dark"):
-            return self._weighted_color(colors, method, threshold=30)
-        return None
-
-    @staticmethod
-    def _most_used_color(colors: np.ndarray, threshold: int) -> Optional[Tuple[int, int, int]]:
-        if colors.size == 0:
-            return None
-        counts = {}
-        for r, g, b in colors:
-            key = (int(r), int(g), int(b))
-            counts[key] = counts.get(key, 0) + 1
-        entries = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
-        clusters = []
-        thr2 = threshold * threshold
-        for color, count in entries:
-            matched = None
-            for cluster in clusters:
-                cr, cg, cb = cluster["rep"]
-                dr = color[0] - cr
-                dg = color[1] - cg
-                db = color[2] - cb
-                if dr * dr + dg * dg + db * db <= thr2:
-                    matched = cluster
-                    break
-            if matched:
-                matched["total"] += count
-                if count > matched["top_count"]:
-                    matched["top_color"] = color
-                    matched["top_count"] = count
-                t = matched["total"]
-                matched["rep"] = (
-                    int(round((matched["rep"][0] * (t - count) + color[0] * count) / t)),
-                    int(round((matched["rep"][1] * (t - count) + color[1] * count) / t)),
-                    int(round((matched["rep"][2] * (t - count) + color[2] * count) / t)),
-                )
-            else:
-                clusters.append({
-                    "rep": color,
-                    "total": count,
-                    "top_color": color,
-                    "top_count": count
-                })
-        dominant = max(clusters, key=lambda c: c["total"])
-        return dominant["top_color"]
-
-    @staticmethod
-    def _weighted_color(colors: np.ndarray, method: str, threshold: int) -> Optional[Tuple[int, int, int]]:
-        if colors.size == 0:
-            return None
-        clusters = []
-        thr2 = threshold * threshold
-        for r, g, b in colors:
-            brightness = 0.299 * r + 0.587 * g + 0.114 * b
-            if method == "most_light":
-                raw_weight = brightness / 255.0
-            else:
-                raw_weight = (255.0 - brightness) / 255.0
-            weight = 0.25 + 0.50 * raw_weight
-            matched = None
-            for cluster in clusters:
-                cr, cg, cb = cluster["rep"]
-                dr = r - cr
-                dg = g - cg
-                db = b - cb
-                if dr * dr + dg * dg + db * db <= thr2:
-                    matched = cluster
-                    break
-            if matched:
-                matched["total"] += weight
-                matched["sum_r"] += r * weight
-                matched["sum_g"] += g * weight
-                matched["sum_b"] += b * weight
-                matched["rep"] = (
-                    int(round(matched["sum_r"] / matched["total"])),
-                    int(round(matched["sum_g"] / matched["total"])),
-                    int(round(matched["sum_b"] / matched["total"]))
-                )
-            else:
-                clusters.append({
-                    "rep": (int(r), int(g), int(b)),
-                    "total": weight,
-                    "sum_r": r * weight,
-                    "sum_g": g * weight,
-                    "sum_b": b * weight
-                })
-        dominant = max(clusters, key=lambda c: c["total"])
-        return dominant["rep"]
 
     def _undo(self):
         self.canvas.undo()
 
     def _redo(self):
         self.canvas.redo_action()
+
+    def _on_color_picked(self, color: Tuple[int, int, int]):
+        hex_color = f"#{color[0]:02x}{color[1]:02x}{color[2]:02x}"
+        self.color_button.configure(fg_color=hex_color)
+
+    def _bind_shortcuts(self):
+        def _undo(_e=None):
+            self._undo()
+            return "break"
+
+        def _redo(_e=None):
+            self._redo()
+            return "break"
+
+        self.bind("<Control-z>", _undo)
+        self.bind("<Control-y>", _redo)
+        self.bind("<Control-Shift-Z>", _redo)
+        self.bind_all("<KeyPress-Alt_L>", self._on_alt_down)
+        self.bind_all("<KeyPress-Alt_R>", self._on_alt_down)
+        self.bind_all("<KeyRelease-Alt_L>", self._on_alt_up)
+        self.bind_all("<KeyRelease-Alt_R>", self._on_alt_up)
+
+    def _is_active_dialog(self) -> bool:
+        widget = self.focus_get()
+        if not widget:
+            return False
+        return widget.winfo_toplevel() == self
+
+    def _on_alt_down(self, _event):
+        if not self._is_active_dialog():
+            return
+        if self._alt_pick_active:
+            return
+        if self.canvas.tool == "picker":
+            return
+        self._alt_prev_tool = self.canvas.tool
+        self._alt_pick_active = True
+        self._set_tool("picker")
+
+    def _on_alt_up(self, _event):
+        if not self._alt_pick_active:
+            return
+        self._alt_pick_active = False
+        prev_tool = self._alt_prev_tool or "brush"
+        self._alt_prev_tool = None
+        self._set_tool(prev_tool)
 
     def _on_apply(self):
         if not self.canvas.get_pixel_data():
@@ -1904,7 +1959,7 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
         if not self.config_mgr:
             return
         self.config_mgr.set("pixelization_editor", "target_size", value=int(self.target_size_entry.get()))
-        self.config_mgr.set("pixelization_editor", "conversion_method", value=self.method_var.get())
+        self.config_mgr.set("pixelization_editor", "conversion_method", value="neighbor")
         self.config_mgr.set("pixelization_editor", "tool_size", value=int(self.tool_size_var.get()))
         self.config_mgr.set("pixelization_editor", "grid_visible", value=self.grid_toggle_var.get())
         self.config_mgr.set(

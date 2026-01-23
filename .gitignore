@@ -1,5 +1,6 @@
 *.pth
 __pycache__/
+__temp__/
 *.jpg
 *.png
 *.mp4

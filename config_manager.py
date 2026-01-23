@@ -58,6 +58,20 @@ class ConfigManager:
             "palette_dialog_y": None,
             "spinner_name": "dots"  # Spinner animation style (from spinners.json)
         },
+
+        # Pixelization editor preferences
+        "pixelization_editor": {
+            "target_size": 64,
+            "conversion_method": "most",
+            "tool": "brush",
+            "tool_size": 1,
+            "grid_visible": True,
+            "magic_wand_threshold": 5,
+            "dialog_width": 1100,
+            "dialog_height": 700,
+            "dialog_x": None,
+            "dialog_y": None
+        },
         
         # Recent files (keep last 10)
         "recent_files": []

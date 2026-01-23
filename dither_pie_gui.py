@@ -33,7 +33,8 @@ from gui_components import (
     ZoomableImage,
     ProgressDialog,
     StatusBar,
-    DitherSettingsDialog
+    DitherSettingsDialog,
+    PixelizationEditorDialog
 )
 from utils import (
     PaletteManager,
@@ -282,6 +283,14 @@ class DitheringApp(ctk.CTk):
         )
         self.btn_pixelize_neural.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
         row += 1
+
+        self.btn_pixelize_editor = ctk.CTkButton(
+            self.sidebar,
+            text="Pixelization Editor...",
+            command=self._on_pixelization_editor
+        )
+        self.btn_pixelize_editor.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
+        row += 1
         
         # Separator
         ctk.CTkLabel(self.sidebar, text="Final Resize", font=("Arial", 14, "bold")).grid(
@@ -451,6 +460,7 @@ class DitheringApp(ctk.CTk):
         self.random_frame_button.configure(state="disabled")
         self.btn_pixelize.configure(state="disabled")
         self.btn_pixelize_neural.configure(state="disabled")
+        self.btn_pixelize_editor.configure(state="disabled")
         self.btn_dither.configure(state="disabled")
         self.apply_video_button.configure(state="disabled")
         self.btn_save.configure(state="disabled")
@@ -468,6 +478,7 @@ class DitheringApp(ctk.CTk):
         self.random_frame_button.configure(state="normal")
         self.btn_pixelize.configure(state="normal")
         self.btn_pixelize_neural.configure(state="normal")
+        self.btn_pixelize_editor.configure(state="normal")
         self.btn_dither.configure(state="normal")
         self.apply_video_button.configure(state="normal")
         self.btn_save.configure(state="normal")
@@ -796,6 +807,30 @@ class DitheringApp(ctk.CTk):
             self.after(0, lambda: self._update_resize_preview())
         
         threading.Thread(target=process, daemon=True).start()
+
+    def _on_pixelization_editor(self):
+        """Open pixelization editor dialog."""
+        if not self.current_image:
+            messagebox.showwarning("No Image", "Please load an image or video first.")
+            return
+
+        dialog = PixelizationEditorDialog(self, self.current_image, config=self.config)
+        self.wait_window(dialog)
+
+        if dialog.result_image:
+            self.pixelized_image = dialog.result_image.convert("RGB")
+            self.last_pixelization_method = PixelizeMethod.REGULAR
+            self.dithered_image = None
+            self.display_state = "pixelized"
+            self.pixelization_cache = {
+                "method": "editor",
+                "max_size": None,
+                "source_hash": self._compute_image_hash(self.current_image)
+            }
+            self.image_viewer.set_image(self.pixelized_image, update=False)
+            self.fit_to_window()
+            self._update_resize_preview()
+            self.status_bar.set_status("Pixelization editor applied")
     
     def _on_apply_dithering(self):
         """Handle dithering - shows palette selection dialog and applies to current frame."""

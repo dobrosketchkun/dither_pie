@@ -127,6 +127,25 @@ python dither_pie.py config.json input_image.png
 3. **Apply Dithering** → Select palette and see live preview
 4. **Save Result** → Export as PNG or process full video
 
+### Pixelization Editor (GUI)
+Open **Pixelization Editor** from the sidebar (images only). This dialog lets you position the source image over a square grid, pixelize with the fixed Neighbor method, and edit the result directly.
+
+<video src="https://github.com/user-attachments/assets/7a26f44f-6032-4eb3-b00c-0ed4de707431"></video>  
+
+**Editor workflow:**
+1. **Target size** → Sets grid resolution (aspect ratio preserved)
+2. **Fit to grid** → Fits grid + image to the window
+3. **Pixelize** → Converts the current view to pixels
+4. **Edit tools** → Brush, Wand, Pick (color from image/canvas)
+5. **Apply** → Sends the pixelized image back to the main window
+
+**Shortcuts and modifiers:**
+- `Ctrl+Z` / `Ctrl+Y` / `Ctrl+Shift+Z` → Undo / Redo
+- `Shift + mouse wheel` → Fine zoom increments
+- `Alt + mouse wheel` → Zoom image + grid together (preview mode)
+- `Shift + drag` → Move grid with the image (preview mode)
+- `Alt (hold)` → Temporary color picker while using Brush
+
 ### CLI Basic Workflow
 1. **Create config** → Generate example: `python dither_pie.py --example-config`
 2. **Edit settings** → Modify JSON with your parameters

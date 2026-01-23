@@ -459,10 +459,12 @@ class PixelizationEditorCanvas(ZoomableImage):
         zoom = self.zoom_factor
         ox = self.offset_x
         oy = self.offset_y
+        auto_fit = self._auto_fit_on_resize
         self.set_image(image, update=False)
         self.zoom_factor = zoom
         self.offset_x = ox
         self.offset_y = oy
+        self._auto_fit_on_resize = auto_fit
         self.update_view()
 
     def _canvas_to_cell(self, x: float, y: float) -> Optional[Tuple[int, int]]:
@@ -598,10 +600,13 @@ class PixelizationEditorCanvas(ZoomableImage):
                     continue
                 if color not in targets:
                     targets.append(color)
+        replacement = self.draw_color
         for target in targets:
+            if self._color_distance(target, replacement) == 0:
+                continue
             start_cell = self._find_cell_with_color(start_i, start_j, end_i, end_j, target)
             if start_cell:
-                self._flood_fill_from(start_cell, target)
+                self._flood_fill_from(start_cell, target, replacement)
         self._update_image_from_pixels(preserve_view=True)
 
     def _find_cell_with_color(self, start_i, start_j, end_i, end_j, target):
@@ -612,7 +617,7 @@ class PixelizationEditorCanvas(ZoomableImage):
                     return (i, j)
         return None
 
-    def _flood_fill_from(self, cell: Tuple[int, int], target: Tuple[int, int, int]):
+    def _flood_fill_from(self, cell: Tuple[int, int], target: Tuple[int, int, int], replacement: Tuple[int, int, int]):
         i, j = cell
         threshold = self.magic_threshold
         stack = [(i, j)]
@@ -629,7 +634,7 @@ class PixelizationEditorCanvas(ZoomableImage):
                 continue
             if self._color_distance(color, target) > threshold:
                 continue
-            self.pixel_colors[cj][ci] = None
+            self.pixel_colors[cj][ci] = replacement
             stack.extend([
                 (ci - 1, cj), (ci + 1, cj),
                 (ci, cj - 1), (ci, cj + 1)

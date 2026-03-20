@@ -1047,8 +1047,8 @@ class DitheringApp(ctk.CTk):
                 try:
                     dither_mode = DitherMode(self.dither_mode.get())
                 except:
-                    dither_mode = DitherMode.BAYER4x4
-                
+                    dither_mode = DitherMode.BAYER
+
                 # Create ditherer with gamma from dialog
                 # Get custom parameters for this mode
                 mode_params = self.dither_parameters.get(dither_mode.value, {})
@@ -1326,8 +1326,8 @@ class DitheringApp(ctk.CTk):
             try:
                 dither_mode = DitherMode(self.dither_mode.get())
             except:
-                dither_mode = DitherMode.BAYER4x4
-            
+                dither_mode = DitherMode.BAYER
+
             self.status_bar.set_status("Applying final dithering...", spinning=True)
             
             def process():

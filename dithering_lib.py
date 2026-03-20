@@ -1123,11 +1123,11 @@ class HybridDitherStrategy(BaseDitherStrategy):
         if _NUMBA_AVAILABLE:
             try:
                 palette_f = palette_arr.astype(np.float32, copy=False)
-                work_2d = _ostromoukhov_numba(
+                work_2d = _hybrid_numba(
                     work_2d,
                     palette_f,
-                    _OSTRO_COEFFS,
-                    self.serpentine
+                    float(self.lum_factor),
+                    float(self.col_factor)
                 )
                 return work_2d.reshape((-1, 3))
             except Exception:
@@ -1398,6 +1398,107 @@ if _NUMBA_AVAILABLE:
                     v2 = 255.0
                 work_2d[y, x, 2] = v2
         
+        return work_2d
+
+
+if _NUMBA_AVAILABLE:
+    @njit(cache=True)
+    def _hybrid_numba(work_2d: np.ndarray,
+                      palette_arr: np.ndarray,
+                      lum_factor: float,
+                      col_factor: float) -> np.ndarray:
+        h = work_2d.shape[0]
+        w = work_2d.shape[1]
+        palette_len = palette_arr.shape[0]
+
+        for y in range(h):
+            for x in range(w):
+                r = work_2d[y, x, 0]
+                g = work_2d[y, x, 1]
+                b = work_2d[y, x, 2]
+                if r < 0.0:
+                    r = 0.0
+                elif r > 255.0:
+                    r = 255.0
+                if g < 0.0:
+                    g = 0.0
+                elif g > 255.0:
+                    g = 255.0
+                if b < 0.0:
+                    b = 0.0
+                elif b > 255.0:
+                    b = 255.0
+
+                best_idx = 0
+                best_dist = 1e20
+                for i in range(palette_len):
+                    dr = r - palette_arr[i, 0]
+                    dg = g - palette_arr[i, 1]
+                    db = b - palette_arr[i, 2]
+                    dist = dr * dr + dg * dg + db * db
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_idx = i
+
+                chosen0 = palette_arr[best_idx, 0]
+                chosen1 = palette_arr[best_idx, 1]
+                chosen2 = palette_arr[best_idx, 2]
+                work_2d[y, x, 0] = chosen0
+                work_2d[y, x, 1] = chosen1
+                work_2d[y, x, 2] = chosen2
+
+                err0 = r - chosen0
+                err1 = g - chosen1
+                err2 = b - chosen2
+
+                # split error into luminance and color components
+                lum_err_val = 0.299 * err0 + 0.587 * err1 + 0.114 * err2
+                lum0 = 0.299 * lum_err_val
+                lum1 = 0.587 * lum_err_val
+                lum2 = 0.114 * lum_err_val
+                fe0 = lum_factor * lum0 + col_factor * (err0 - lum0)
+                fe1 = lum_factor * lum1 + col_factor * (err1 - lum1)
+                fe2 = lum_factor * lum2 + col_factor * (err2 - lum2)
+
+                # Floyd-Steinberg distribution
+                if x + 1 < w:
+                    work_2d[y, x + 1, 0] += fe0 * (7.0 / 16.0)
+                    work_2d[y, x + 1, 1] += fe1 * (7.0 / 16.0)
+                    work_2d[y, x + 1, 2] += fe2 * (7.0 / 16.0)
+                if y + 1 < h:
+                    if x - 1 >= 0:
+                        work_2d[y + 1, x - 1, 0] += fe0 * (3.0 / 16.0)
+                        work_2d[y + 1, x - 1, 1] += fe1 * (3.0 / 16.0)
+                        work_2d[y + 1, x - 1, 2] += fe2 * (3.0 / 16.0)
+                    work_2d[y + 1, x, 0] += fe0 * (5.0 / 16.0)
+                    work_2d[y + 1, x, 1] += fe1 * (5.0 / 16.0)
+                    work_2d[y + 1, x, 2] += fe2 * (5.0 / 16.0)
+                    if x + 1 < w:
+                        work_2d[y + 1, x + 1, 0] += fe0 * (1.0 / 16.0)
+                        work_2d[y + 1, x + 1, 1] += fe1 * (1.0 / 16.0)
+                        work_2d[y + 1, x + 1, 2] += fe2 * (1.0 / 16.0)
+
+        for y in range(h):
+            for x in range(w):
+                v0 = work_2d[y, x, 0]
+                if v0 < 0.0:
+                    v0 = 0.0
+                elif v0 > 255.0:
+                    v0 = 255.0
+                work_2d[y, x, 0] = v0
+                v1 = work_2d[y, x, 1]
+                if v1 < 0.0:
+                    v1 = 0.0
+                elif v1 > 255.0:
+                    v1 = 255.0
+                work_2d[y, x, 1] = v1
+                v2 = work_2d[y, x, 2]
+                if v2 < 0.0:
+                    v2 = 0.0
+                elif v2 > 255.0:
+                    v2 = 255.0
+                work_2d[y, x, 2] = v2
+
         return work_2d
 
 # -------------------- Halftone Dithering --------------------

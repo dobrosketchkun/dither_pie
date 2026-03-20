@@ -866,20 +866,30 @@ class WaveletDitherStrategy(BaseDitherStrategy):
                 'max': 32,
                 'label': 'Subband Quantization',
                 'description': 'Number of quantization levels for wavelet subbands'
+            },
+            'seed': {
+                'type': 'int',
+                'default': 42,
+                'min': 0,
+                'max': 9999,
+                'label': 'Random Seed',
+                'description': 'Seed for random threshold generation (same seed = same output)'
             }
         }
-    
-    def __init__(self, wavelet: str = 'haar', subband_quant: int = 8):
+
+    def __init__(self, wavelet: str = 'haar', subband_quant: int = 8, seed: int = 42):
         self.wavelet = wavelet
         self.subband_quant = subband_quant
-    
+        self.seed = seed
+
     def get_current_parameters(self) -> Dict[str, Any]:
         """Returns current parameter values."""
-        return {'wavelet': self.wavelet, 'subband_quant': self.subband_quant}
+        return {'wavelet': self.wavelet, 'subband_quant': self.subband_quant, 'seed': self.seed}
 
     def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
                image_size: Tuple[int, int]) -> np.ndarray:
         h, w = image_size
+        rng = np.random.RandomState(self.seed)
         pix_3d = pixels.reshape((h, w, 3)).copy()
         result_3d = np.zeros_like(pix_3d)
 
@@ -887,10 +897,10 @@ class WaveletDitherStrategy(BaseDitherStrategy):
             channel_data = pix_3d[:, :, ch]
             coeffs2 = pywt.dwt2(channel_data, self.wavelet)
             cA, (cH, cV, cD) = coeffs2
-            cA_d = self._quant_subband(cA)
-            cH_d = self._quant_subband(cH)
-            cV_d = self._quant_subband(cV)
-            cD_d = self._quant_subband(cD)
+            cA_d = self._quant_subband(cA, rng)
+            cH_d = self._quant_subband(cH, rng)
+            cV_d = self._quant_subband(cV, rng)
+            cD_d = self._quant_subband(cD, rng)
             new_coeffs2 = (cA_d, (cH_d, cV_d, cD_d))
             rec_channel = pywt.idwt2(new_coeffs2, self.wavelet)
             rec_channel = rec_channel[:h, :w]
@@ -906,19 +916,19 @@ class WaveletDitherStrategy(BaseDitherStrategy):
         ds = dist_sq[:, 1]
         tot = dn + ds
         factor = np.where(tot == 0, 0.0, dn / tot)
-        rand_thr = np.random.rand(len(flat_final))
+        rand_thr = rng.rand(len(flat_final))
         idx_nearest = indices[:, 0]
         idx_second = indices[:, 1]
         use_nearest = (factor <= rand_thr)
         final_idx = np.where(use_nearest, idx_nearest, idx_second)
         return palette_arr[final_idx, :]
 
-    def _quant_subband(self, subband: np.ndarray) -> np.ndarray:
+    def _quant_subband(self, subband: np.ndarray, rng: np.random.RandomState) -> np.ndarray:
         mn = subband.min()
         mx = subband.max()
         if mx == mn:
             return subband.astype(np.float32)
-        noise = np.random.rand(*subband.shape).astype(np.float32)
+        noise = rng.rand(*subband.shape).astype(np.float32)
         scale = mx - mn
         norm = (subband - mn) / (scale + 1e-9)
         q = norm * self.subband_quant

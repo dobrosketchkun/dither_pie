@@ -10,6 +10,7 @@ from enum import Enum
 from typing import List, Tuple, Optional, Dict, Any
 from PIL import Image
 from scipy.spatial import KDTree
+from scipy.ndimage import uniform_filter
 from sklearn.cluster import KMeans
 import pywt  # For wavelet-based dithering if needed
 import heapq
@@ -1017,20 +1018,11 @@ class AdaptiveVarianceDitherStrategy(BaseDitherStrategy):
         return work_2d.reshape((-1, 3))
 
     def _compute_variance_map(self, gray_2d: np.ndarray) -> np.ndarray:
-        h, w = gray_2d.shape
-        var_map = np.zeros((h, w), dtype=np.float32)
-        wr = self.window_radius
-
-        for y in range(h):
-            y1 = max(0, y - wr)
-            y2 = min(h, y + wr + 1)
-            for x in range(w):
-                x1 = max(0, x - wr)
-                x2 = min(w, x + wr + 1)
-                region = gray_2d[y1:y2, x1:x2]
-                variance = region.var()
-                var_map[y, x] = variance
-        return var_map
+        size = 2 * self.window_radius + 1
+        g = gray_2d.astype(np.float32)
+        mean_sq = uniform_filter(g ** 2, size=size, mode='nearest')
+        sq_mean = uniform_filter(g, size=size, mode='nearest') ** 2
+        return np.maximum(0.0, mean_sq - sq_mean)
 
 
 # -------------------- Perceptual Dithering --------------------

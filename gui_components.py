@@ -89,6 +89,40 @@ class ZoomableImage(tk.Canvas):
         self._auto_fit_on_resize = True
         self.update_view()
 
+    # Transparency checkerboard, in screen pixels so squares stay a constant
+    # size however far the user zooms in.
+    _CHECKER_SQUARE = 8
+    _CHECKER_LIGHT = (99, 99, 99)
+    _CHECKER_DARK = (72, 72, 72)
+
+    @classmethod
+    def _make_checkerboard(cls, w: int, h: int) -> Image.Image:
+        """Build a w x h checkerboard by tiling a 2x2-square patch."""
+        s = cls._CHECKER_SQUARE
+        tile = np.empty((2 * s, 2 * s, 3), dtype=np.uint8)
+        tile[:s, :s] = cls._CHECKER_LIGHT
+        tile[s:, s:] = cls._CHECKER_LIGHT
+        tile[:s, s:] = cls._CHECKER_DARK
+        tile[s:, :s] = cls._CHECKER_DARK
+        reps = ((h + 2 * s - 1) // (2 * s), (w + 2 * s - 1) // (2 * s), 1)
+        return Image.fromarray(np.tile(tile, reps)[:h, :w], 'RGB')
+
+    @classmethod
+    def _composite_for_display(cls, image: Image.Image) -> Image.Image:
+        """
+        Flatten a transparent image onto a checkerboard for display.
+
+        Without this, transparent regions take the canvas background and read
+        as black content rather than as empty space.
+        """
+        if image.mode not in ('RGBA', 'LA', 'PA', 'P'):
+            return image
+        rgba = image.convert('RGBA')
+        if rgba.getchannel('A').getextrema()[0] == 255:
+            return image  # nothing actually transparent
+        backdrop = cls._make_checkerboard(rgba.width, rgba.height).convert('RGBA')
+        return Image.alpha_composite(backdrop, rgba).convert('RGB')
+
     def update_view(self):
         if not self.original_image:
             return
@@ -98,6 +132,7 @@ class ZoomableImage(tk.Canvas):
             return
 
         resized = self.original_image.resize((nw, nh), Image.Resampling.NEAREST)
+        resized = self._composite_for_display(resized)
         self.displayed_image = ImageTk.PhotoImage(resized)
 
         cw = self.winfo_width()
@@ -1605,7 +1640,8 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
     """
     Dialog for pixelization setup, conversion, and editing.
     """
-    def __init__(self, parent, source_image: Image.Image, config=None):
+    def __init__(self, parent, source_image: Image.Image, config=None,
+                 alpha_cutoff: int = 0):
         super().__init__(parent)
         self.title("Pixelization Editor")
         self.resizable(True, True)
@@ -1622,6 +1658,9 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
 
         self.config_mgr = config
         self.source_image = source_image.convert("RGBA")
+        # Sampled source pixels fainter than this count as absent. 0 keeps
+        # everything that is not fully transparent.
+        self.alpha_cutoff = max(0, min(255, int(alpha_cutoff)))
         self.result_image = None
         self.grid_w = 1
         self.grid_h = 1
@@ -1990,7 +2029,11 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
                 oy = int(round((cy - origin_y) / scale))
                 if ox < 0 or oy < 0 or ox >= img_w or oy >= img_h:
                     continue
-                if has_alpha and img_arr[oy, ox, 3] == 0:
+                if has_alpha and img_arr[oy, ox, 3] <= self.alpha_cutoff:
+                    # Grid sampling is a point sample, so a faint anti-aliased
+                    # edge pixel would otherwise land as a fully opaque one -
+                    # the white halo around a soft-edged sprite. Treat anything
+                    # at or below the cutoff as absent instead.
                     continue
                 r, g, b = img_arr[oy, ox, 0:3]
                 pixels[j][i] = (int(r), int(g), int(b))
@@ -2076,14 +2119,22 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
         self.destroy()
 
     def _pixel_data_to_image(self, pixels):
-        img = Image.new("RGB", (self.grid_w, self.grid_h), (0, 0, 0))
+        """
+        Export the edited pixel grid.
+
+        Absent cells (None) must come out fully transparent, matching what the
+        canvas has been showing all along via _update_image_from_pixels. Filling
+        them with opaque black instead would turn every empty cell into real
+        black content the moment the result left this dialog.
+        """
+        img = Image.new("RGBA", (self.grid_w, self.grid_h), (0, 0, 0, 0))
         px = img.load()
         for j in range(self.grid_h):
             for i in range(self.grid_w):
                 color = pixels[j][i]
                 if color is None:
                     continue
-                px[i, j] = color
+                px[i, j] = (*color, 255)
         return img
 
     def _save_config(self):

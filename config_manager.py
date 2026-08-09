@@ -39,7 +39,13 @@ class ConfigManager:
             "dither_mode": "bayer",
             "use_gamma": False,
             "final_resize_enabled": False,
-            "final_size": 1920
+            "final_size": 1920,
+            # Pixelization editor: source pixels with alpha below this are
+            # sampled as absent rather than as opaque color. 0 keeps every
+            # pixel that is not fully transparent; 128 is the usual choice for
+            # hard-edged pixel art, and stops an anti-aliased fringe from
+            # becoming an opaque halo.
+            "alpha_cutoff": 128
         },
         
         # Last used paths

@@ -5,9 +5,17 @@ Utility functions for the dithering application.
 import json
 import os
 import requests
+from pathlib import Path
 from typing import List, Tuple, Dict, Optional
 from PIL import Image
 import numpy as np
+
+from dithering_lib import (
+    ALPHA_CAPABLE_FORMATS,
+    has_actual_transparency,
+    image_has_alpha_channel,
+    split_alpha,
+)
 
 __all__ = [
     # Functions
@@ -23,6 +31,14 @@ __all__ = [
     'validate_image_file',
     'get_image_info',
     'ensure_rgb',
+    # Transparency helpers (re-exported from dithering_lib for GUI/CLI use)
+    'has_actual_transparency',
+    'image_has_alpha_channel',
+    'split_alpha',
+    'ALPHA_CAPABLE_FORMATS',
+    'format_supports_alpha',
+    'alpha_save_filetypes',
+    'check_save_format',
     # Classes
     'PaletteManager',
 ]
@@ -242,6 +258,54 @@ def get_image_info(filepath: str) -> Optional[Dict]:
     except Exception as e:
         print(f"Error getting image info: {e}")
         return None
+
+
+def format_supports_alpha(filepath) -> bool:
+    """True if the file extension names a format that can store an alpha channel."""
+    return Path(filepath).suffix.lower() in ALPHA_CAPABLE_FORMATS
+
+
+def alpha_save_filetypes(has_alpha: bool) -> List[Tuple[str, str]]:
+    """
+    Build the filetypes list for a save dialog.
+
+    When the image has real transparency, only alpha-capable formats are
+    offered - we refuse to flatten silently rather than quietly discarding
+    what the user can see in the preview.
+    """
+    if has_alpha:
+        return [
+            ("PNG files", "*.png"),
+            ("WebP files", "*.webp"),
+            ("TIFF files", "*.tiff"),
+        ]
+    return [
+        ("PNG files", "*.png"),
+        ("JPEG files", "*.jpg"),
+        ("All files", "*.*"),
+    ]
+
+
+def check_save_format(image: Image.Image, filepath) -> Optional[str]:
+    """
+    Validate that filepath's format can represent the image.
+
+    Returns None if the save is fine, or an explanatory message if it is not.
+
+    Restricting a save dialog's filetypes list is not sufficient on its own:
+    asksaveasfilename lets the user type any extension regardless of the
+    dropdown, and the CLI takes its output path straight from a config file.
+    This is the check that actually holds the line.
+    """
+    if not image_has_alpha_channel(image):
+        return None
+    if not has_actual_transparency(image):
+        return None
+    if format_supports_alpha(filepath):
+        return None
+    ext = Path(filepath).suffix.lower() or "(no extension)"
+    return (f"This image has transparency, which the {ext} format cannot store. "
+            f"Save it as PNG, WebP or TIFF instead.")
 
 
 def ensure_rgb(image: Image.Image) -> Image.Image:

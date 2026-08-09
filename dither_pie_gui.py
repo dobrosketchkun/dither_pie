@@ -39,7 +39,11 @@ from gui_components import (
 from utils import (
     PaletteManager,
     validate_video_file,
-    validate_image_file
+    validate_image_file,
+    has_actual_transparency,
+    alpha_save_filetypes,
+    check_save_format,
+    split_alpha
 )
 from config_manager import ConfigManager
 
@@ -77,6 +81,7 @@ class DitheringApp(ctk.CTk):
         self.dithered_image = None
         self.video_path = None
         self.is_video = False
+        self.source_has_alpha = False  # True only if the source really has non-opaque pixels
         self.last_palette = None
         self.last_gamma = False  # Track gamma setting from last dithering operation
         self.last_pixelization_method = PixelizeMethod.REGULAR
@@ -284,6 +289,21 @@ class DitheringApp(ctk.CTk):
         self.btn_pixelize_neural.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
         row += 1
 
+        # Alpha cutoff for the editor's grid sampling. Source pixels fainter
+        # than this are treated as absent, so an anti-aliased fringe does not
+        # come through as an opaque halo.
+        ctk.CTkLabel(self.sidebar, text="Editor Alpha Cutoff (0-255):").grid(
+            row=row, column=0, pady=(8, 2), padx=10, sticky='w'
+        )
+        row += 1
+
+        self.alpha_cutoff_entry = ctk.CTkEntry(self.sidebar, width=100)
+        self.alpha_cutoff_entry.insert(
+            0, str(self.config.get("defaults", "alpha_cutoff", default=128))
+        )
+        self.alpha_cutoff_entry.grid(row=row, column=0, pady=2, padx=10, sticky='w')
+        row += 1
+
         self.btn_pixelize_editor = ctk.CTkButton(
             self.sidebar,
             text="Pixelization Editor",
@@ -453,6 +473,33 @@ class DitheringApp(ctk.CTk):
         self.status_bar = StatusBar(self, spinner_name=spinner_name)
         self.status_bar.grid(row=1, column=0, columnspan=2, sticky='ew', padx=10, pady=(0, 10))
     
+    def _get_alpha_cutoff(self) -> int:
+        """
+        Read the editor alpha cutoff from the sidebar, clamped to 0-255.
+
+        Falls back to the stored default on anything unparseable rather than
+        refusing to open the editor over a typo.
+        """
+        try:
+            value = int(self.alpha_cutoff_entry.get())
+        except (ValueError, AttributeError):
+            value = self.config.get("defaults", "alpha_cutoff", default=128)
+        return max(0, min(255, int(value)))
+
+    def _update_neural_button_state(self):
+        """
+        Enable/disable neural pixelization based on whether the source actually
+        has transparency.
+
+        The neural model is 3-channel (models/pixelization.py converts to RGB),
+        so it cannot carry alpha at all. Rather than silently flattening, the
+        option is withdrawn. Videos are always eligible - FFmpeg frames are RGB.
+        """
+        if self.source_has_alpha and not self.is_video:
+            self.btn_pixelize_neural.configure(state="disabled")
+        else:
+            self.btn_pixelize_neural.configure(state="normal")
+
     def _disable_controls(self):
         """Disable all control buttons and inputs to prevent interaction during palette selection."""
         self.btn_load_img.configure(state="disabled")
@@ -466,6 +513,7 @@ class DitheringApp(ctk.CTk):
         self.btn_save.configure(state="disabled")
         # Keep btn_toggle, btn_fit, dither_dropdown, and dither_settings_button enabled so user can view/adjust while choosing palette
         self.max_size_entry.configure(state="disabled")
+        self.alpha_cutoff_entry.configure(state="disabled")
         self.colors_entry.configure(state="disabled")
         self.resize_multiplier_entry.configure(state="disabled")
         # self.dither_dropdown stays enabled for live preview
@@ -477,7 +525,9 @@ class DitheringApp(ctk.CTk):
         self.btn_load_video.configure(state="normal")
         self.random_frame_button.configure(state="normal")
         self.btn_pixelize.configure(state="normal")
-        self.btn_pixelize_neural.configure(state="normal")
+        # Not unconditional: this runs after every palette selection, so a plain
+        # re-enable here would silently undo the transparency gating.
+        self._update_neural_button_state()
         if self.is_video:
             self.btn_pixelize_editor.configure(state="disabled")
         else:
@@ -488,6 +538,7 @@ class DitheringApp(ctk.CTk):
         # btn_toggle already enabled
         # btn_fit already enabled
         self.max_size_entry.configure(state="normal")
+        self.alpha_cutoff_entry.configure(state="normal")
         self.colors_entry.configure(state="normal")
         self.resize_multiplier_entry.configure(state="normal")
         # self.dither_dropdown already enabled
@@ -594,7 +645,12 @@ class DitheringApp(ctk.CTk):
         self.config.add_recent_file(filepath)
         
         try:
-            self.current_image = Image.open(filepath).convert('RGB')
+            loaded = Image.open(filepath)
+            # Only images with genuinely non-opaque pixels are kept as RGBA; a
+            # fully-opaque RGBA PNG becomes RGB so the existing path is untouched.
+            self.source_has_alpha = has_actual_transparency(loaded)
+            self.current_image = (loaded.convert('RGBA') if self.source_has_alpha
+                                  else loaded.convert('RGB'))
             self.dithered_image = None
             self.is_video = False
             self.video_path = None
@@ -611,10 +667,15 @@ class DitheringApp(ctk.CTk):
             self.apply_video_button.grid_remove()
             self.random_frame_button.grid_remove()
             self.btn_pixelize_editor.configure(state="normal")
-            
+            self._update_neural_button_state()
+
             self.image_viewer.set_image(self.current_image, update=False)
             self.fit_to_window()
-            self.status_bar.set_status(f"Loaded image: {Path(filepath).name} - {self.original_size[0]}x{self.original_size[1]}")
+            status = (f"Loaded image: {Path(filepath).name} - "
+                      f"{self.original_size[0]}x{self.original_size[1]}")
+            if self.source_has_alpha:
+                status += "  |  transparency detected: neural pixelization unavailable, save as PNG"
+            self.status_bar.set_status(status)
             
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load image:\n{e}")
@@ -649,9 +710,12 @@ class DitheringApp(ctk.CTk):
                 subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
                 
                 self.current_image = Image.open(frame_path).convert('RGB')
-            
+
             self.dithered_image = None
             self.is_video = True
+            # Video frames come out of FFmpeg as RGB - never any alpha to lose.
+            self.source_has_alpha = False
+            self._update_neural_button_state()
             self.video_path = filepath
             self.display_state = "current"
             
@@ -819,11 +883,24 @@ class DitheringApp(ctk.CTk):
             messagebox.showwarning("No Image", "Please load an image or video first.")
             return
 
-        dialog = PixelizationEditorDialog(self, self.current_image, config=self.config)
+        dialog = PixelizationEditorDialog(
+            self, self.current_image, config=self.config,
+            alpha_cutoff=self._get_alpha_cutoff()
+        )
         self.wait_window(dialog)
 
         if dialog.result_image:
-            self.pixelized_image = dialog.result_image.convert("RGB")
+            # The editor tracks absent pixels as None cells and renders them to a
+            # real RGBA image; flattening here would turn every one of them black.
+            # It can also introduce transparency a fully-opaque source never had,
+            # so re-evaluate rather than reusing the load-time answer.
+            result = dialog.result_image
+            if has_actual_transparency(result):
+                self.pixelized_image = result.convert("RGBA")
+                self.source_has_alpha = True
+            else:
+                self.pixelized_image = result.convert("RGB")
+            self._update_neural_button_state()
             self.last_pixelization_method = PixelizeMethod.REGULAR
             self.dithered_image = None
             self.display_state = "pixelized"
@@ -1128,13 +1205,21 @@ class DitheringApp(ctk.CTk):
         # Generate palette options
         def generate_palette_options():
             palette_options = []
-            
+
+            # These palettes are handed to ImageDitherer ready-made, so it skips
+            # its own generation - the opaque mask has to be applied here too, or
+            # invisible pixels would still shape the palette.
+            source_rgb, source_alpha = split_alpha(source_image)
+            source_mask = None if source_alpha is None else (source_alpha > 0)
+
             # Median Cut
-            mc_palette = ColorReducer.reduce_colors(source_image, num_colors)
+            mc_palette = ColorReducer.reduce_colors(source_rgb, num_colors, mask=source_mask)
             palette_options.append(("Median Cut", mc_palette))
-            
+
             # K-means
-            km_palette = ColorReducer.generate_kmeans_palette(source_image, num_colors, random_state=42)
+            km_palette = ColorReducer.generate_kmeans_palette(
+                source_rgb, num_colors, random_state=42, mask=source_mask
+            )
             palette_options.append(("K-means", km_palette))
             
             # Uniform
@@ -1486,23 +1571,27 @@ class DitheringApp(ctk.CTk):
         default_filename = self._generate_filename(state)
         
         initial_dir = self.config.get_last_path("save")
+        # Offer only alpha-capable formats when there is transparency to lose.
+        img_has_alpha = has_actual_transparency(img_to_save)
         filepath = filedialog.asksaveasfilename(
             initialdir=initial_dir,
             defaultextension=".png",
             initialfile=default_filename,
-            filetypes=[
-                ("PNG files", "*.png"),
-                ("JPEG files", "*.jpg"),
-                ("All files", "*.*")
-            ]
+            filetypes=alpha_save_filetypes(img_has_alpha)
         )
-        
+
         if filepath:
             # Remember this directory
             self.config.update_last_path("save", filepath)
             try:
                 # Apply final resize if enabled before saving
                 final_image = self._apply_final_resize(img_to_save)
+                # The filetypes list above is only a hint - asksaveasfilename
+                # accepts any typed extension - so this is the real guard.
+                problem = check_save_format(final_image, filepath)
+                if problem:
+                    messagebox.showerror("Unsupported Format", problem)
+                    return
                 final_image.save(filepath)
                 self.status_bar.set_status(f"Saved: {Path(filepath).name}")
                 messagebox.showinfo("Success", f"Image saved:\n{filepath}")
@@ -1663,20 +1752,30 @@ class DitheringApp(ctk.CTk):
             return
         
         try:
-            new_img = Image.open(fp).convert('RGB')
+            loaded_ref = Image.open(fp)
+            # A reference image's invisible pixels should not shape the palette
+            # any more than the target image's should.
+            new_img, ref_alpha = split_alpha(loaded_ref)
         except Exception as e:
             messagebox.showerror("Error", f"Failed to open image:\n{e}", parent=parent_dialog)
             return
-        
+
         try:
             desired = int(self.colors_entry.get())
             if desired <= 0:
                 raise ValueError
         except:
             desired = 16
-        
+
         arr_full = np.array(new_img)
-        all_pixels = arr_full.reshape(-1, 3)
+        ref_opaque = None if ref_alpha is None else (ref_alpha > 0)
+        if ref_opaque is not None and np.any(ref_opaque):
+            # Filter before counting uniques: a transparent background would
+            # otherwise contribute a phantom color and inflate unique_count,
+            # skewing the clamp below.
+            all_pixels = arr_full[ref_opaque]
+        else:
+            all_pixels = arr_full.reshape(-1, 3)
         unique_pixels = np.unique(all_pixels, axis=0)
         unique_count = unique_pixels.shape[0]
         
@@ -1832,6 +1931,9 @@ class DitheringApp(ctk.CTk):
                 self.config.set("defaults", "num_colors", value=int(self.colors_entry.get()))
             except:
                 pass
+
+            # Store the clamped value, so an out-of-range typo is not persisted
+            self.config.set("defaults", "alpha_cutoff", value=self._get_alpha_cutoff())
             
             try:
                 self.config.set("defaults", "resize_multiplier", value=int(self.resize_multiplier_entry.get()))

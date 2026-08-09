@@ -10,7 +10,7 @@ from enum import Enum
 from typing import List, Tuple, Optional, Dict, Any
 from PIL import Image
 from scipy.spatial import KDTree
-from scipy.ndimage import uniform_filter
+from scipy.ndimage import uniform_filter, distance_transform_edt
 from sklearn.cluster import KMeans
 import pywt  # For wavelet-based dithering if needed
 import heapq
@@ -54,6 +54,12 @@ __all__ = [
     'HalftoneDitherStrategy',
     # Utility functions
     'generate_blue_noise',
+    # Alpha / transparency helpers
+    'image_has_alpha_channel',
+    'has_actual_transparency',
+    'split_alpha',
+    'bleed_fill',
+    'ALPHA_CAPABLE_FORMATS',
 ]
 
 # -------------------- Enumerations --------------------
@@ -1833,10 +1839,22 @@ class ColorReducer:
                 ColorReducer.median_cut(colors[mid:], depth - 1))
 
     @staticmethod
-    def reduce_colors(image: Image.Image, num_colors: int) -> List[Tuple[int, int, int]]:
-        """Reduces the given image to 'num_colors' using median-cut."""
+    def reduce_colors(image: Image.Image, num_colors: int,
+                      mask: Optional[np.ndarray] = None) -> List[Tuple[int, int, int]]:
+        """
+        Reduces the given image to 'num_colors' using median-cut.
+
+        mask: optional (H, W) boolean array selecting which pixels may
+        contribute. Used to keep invisible pixels from shaping the palette.
+        Falls back to the whole image if the mask selects nothing.
+        """
         image = image.convert('RGB')
-        unique_cols = list(set(image.getdata()))
+        if mask is None or not np.any(mask):
+            unique_cols = list(set(image.getdata()))
+        else:
+            selected = np.array(image)[mask]
+            unique_cols = [tuple(int(v) for v in c)
+                           for c in np.unique(selected, axis=0)]
         if num_colors < 1:
             num_colors = 1
         depth = int(math.log2(num_colors)) if num_colors > 1 else 0
@@ -1844,9 +1862,17 @@ class ColorReducer:
 
     @staticmethod
     def generate_kmeans_palette(img: Image.Image, num_colors: int,
-                                random_state=42) -> List[Tuple[int, int, int]]:
+                                random_state=42,
+                                mask: Optional[np.ndarray] = None) -> List[Tuple[int, int, int]]:
+        """
+        K-means palette. mask: optional (H, W) boolean array selecting which
+        pixels may contribute, so invisible pixels cannot claim a cluster.
+        """
         arr = np.array(img.convert('RGB'))
-        pix = arr.reshape(-1, 3)
+        if mask is not None and np.any(mask):
+            pix = arr[mask]
+        else:
+            pix = arr.reshape(-1, 3)
         if len(pix) > 10000:
             import random
             idx = random.sample(range(len(pix)), 10000)
@@ -1870,6 +1896,98 @@ class ColorReducer:
                     bb = int(b * 255 / (cube - 1)) if cube > 1 else 128
                     c.append((rr, gg, bb))
         return c[:num_colors]
+
+
+# -------------------- Alpha / Transparency Helpers --------------------
+
+# Modes that carry an alpha channel directly. Palettised images ('P') can also
+# carry transparency, but via an info['transparency'] key rather than a band.
+_ALPHA_MODES = ('RGBA', 'LA', 'PA')
+
+# File extensions whose format can store an alpha channel. Anything outside this
+# set is refused for images that actually have transparency, rather than being
+# silently flattened.
+ALPHA_CAPABLE_FORMATS = ('.png', '.webp', '.tiff', '.tif', '.gif')
+
+
+def image_has_alpha_channel(image: Image.Image) -> bool:
+    """
+    True if the image *could* carry transparency, judged by mode alone.
+
+    Cheap structural check - says nothing about whether any pixel is actually
+    non-opaque. Use has_actual_transparency() for that.
+    """
+    return image.mode in _ALPHA_MODES or 'transparency' in image.info
+
+
+def has_actual_transparency(image: Image.Image) -> bool:
+    """
+    True only if the image actually contains non-opaque pixels.
+
+    A fully-opaque RGBA image returns False - being in RGBA mode is not itself
+    transparency.
+
+    Threshold is alpha < 255, deliberately wider than the alpha == 0 rule used
+    to decide which pixels are real. This function gates code paths that cannot
+    represent alpha *at all* (neural pixelization, JPEG export), so any alpha
+    information counts, including the partial band of an anti-aliased edge.
+
+    getextrema() is a C-level min/max over a single band, so this is cheap
+    enough to call on every image load.
+    """
+    if not image_has_alpha_channel(image):
+        return False
+    return image.convert('RGBA').getchannel('A').getextrema()[0] < 255
+
+
+def split_alpha(image: Image.Image) -> Tuple[Image.Image, Optional[np.ndarray]]:
+    """
+    Split an image into (rgb_image, alpha_array).
+
+    Returns alpha=None when the image has no alpha channel *or* is fully
+    opaque, which lets callers keep the original RGB-only code path untouched
+    for the overwhelmingly common case.
+
+    Normalizes 'P'-with-transparency and 'LA' up to RGBA first, so palettised
+    PNGs are handled the same as any other transparent image.
+    """
+    if not image_has_alpha_channel(image):
+        return image.convert('RGB'), None
+    rgba = image.convert('RGBA')
+    alpha = np.array(rgba.getchannel('A'), dtype=np.uint8)
+    if alpha.min() == 255:
+        # RGBA mode, but nothing is actually transparent.
+        return rgba.convert('RGB'), None
+    return Image.fromarray(np.array(rgba)[:, :, :3], 'RGB'), alpha
+
+
+def bleed_fill(rgb: np.ndarray, opaque: np.ndarray) -> np.ndarray:
+    """
+    Replace the RGB of every non-opaque pixel with its nearest opaque
+    neighbour's color.
+
+    Transparent pixels carry arbitrary leftover RGB, and a hard discontinuity
+    at the sprite edge reads as real detail to any algorithm that looks at a
+    neighbourhood: the wavelet transform turns it into spurious high-frequency
+    coefficients that ring back into visible pixels, halftone averages it into
+    the ink color of every cell straddling the boundary, and the adaptive
+    variance map spikes along it. Bleeding makes the transparent region locally
+    continuous with the edge so those transforms see no edge at all.
+
+    Returns rgb unchanged if there is nothing to fill or nothing to fill from.
+    """
+    if opaque.all() or not opaque.any():
+        return rgb
+    # distance_transform_edt reports the nearest *zero* element, so invert the
+    # mask: zeros become the opaque pixels we want to sample from.
+    _, indices = distance_transform_edt(
+        ~opaque, return_distances=True, return_indices=True
+    )
+    iy, ix = indices
+    out = rgb.copy()
+    transparent = ~opaque
+    out[transparent] = rgb[iy, ix][transparent]
+    return out
 
 
 # -------------------- Image Ditherer --------------------
@@ -1949,8 +2067,46 @@ class ImageDitherer:
         else:
             return strategy_class()
 
+    def _snap_transparent(self, out_8: np.ndarray, rgb_original_8: np.ndarray,
+                          opaque: np.ndarray, palette_arr: np.ndarray) -> np.ndarray:
+        """
+        Overwrite fully-transparent pixels with the nearest palette color to
+        whatever RGB was hiding under them.
+
+        Without this the output would keep its original under-alpha RGB, so a
+        file described as an N-color image would in fact contain hundreds of
+        colors - visible the moment anyone flattens, composites or color-counts
+        it. Snapping (rather than zeroing) keeps the hidden data roughly shaped
+        like the image, so flattening degrades gracefully instead of producing
+        a black silhouette.
+
+        Runs in the same color space the palette lives in, i.e. inside the
+        gamma bracket, so the linear -> sRGB conversion applies to these pixels
+        exactly as it does to the dithered ones.
+        """
+        transparent = ~opaque
+        if not transparent.any():
+            return out_8
+        px = rgb_original_8[transparent].astype(np.float32)
+        if self.use_gamma:
+            px = np.clip(DitherUtils.srgb_to_linear(px / 255.0) * 255.0, 0, 255)
+        _, idx = KDTree(palette_arr).query(px, k=1, workers=-1)
+        out_8[transparent] = palette_arr[idx].astype(np.uint8)
+        return out_8
+
     def apply_dithering(self, image: Image.Image) -> Image.Image:
-        arr_srgb_8 = np.array(image.convert('RGB'), dtype=np.uint8)
+        # Split alpha off up front. alpha is None both for images with no alpha
+        # channel and for fully-opaque ones, in which case everything below
+        # behaves exactly as it always has and an RGB image is returned.
+        rgb_image, alpha = split_alpha(image)
+        opaque = None if alpha is None else (alpha > 0)
+
+        arr_srgb_8 = np.array(rgb_image, dtype=np.uint8)
+        # Keep the un-bled original: the snap needs the RGB that was actually
+        # under the alpha, not the bleed used to feed the dither.
+        rgb_original_8 = arr_srgb_8
+        if opaque is not None:
+            arr_srgb_8 = bleed_fill(arr_srgb_8, opaque)
 
         # Optionally go to linear domain
         if self.use_gamma:
@@ -1959,11 +2115,13 @@ class ImageDitherer:
             arr_lin_8 = np.clip(arr_lin_01 * 255.0, 0, 255).astype(np.uint8)
             if self.palette is None:
                 temp_img_lin = Image.fromarray(arr_lin_8, 'RGB')
-                self.palette = ColorReducer.reduce_colors(temp_img_lin, self.num_colors)
+                self.palette = ColorReducer.reduce_colors(temp_img_lin, self.num_colors,
+                                                          mask=opaque)
             arr_for_dith = arr_lin_8
         else:
             if self.palette is None:
-                self.palette = ColorReducer.reduce_colors(image, self.num_colors)
+                self.palette = ColorReducer.reduce_colors(rgb_image, self.num_colors,
+                                                          mask=opaque)
             arr_for_dith = arr_srgb_8
 
         # Convert palette to appropriate color space
@@ -1983,10 +2141,22 @@ class ImageDitherer:
         dithered_flat = strategy.dither(flat_pixels, palette_arr, (h, w))
         out_arr_lin_8 = dithered_flat.reshape((h, w, 3)).astype(np.uint8)
 
+        if opaque is not None:
+            out_arr_lin_8 = self._snap_transparent(
+                out_arr_lin_8, rgb_original_8, opaque, palette_arr
+            )
+
         if self.use_gamma:
             out_lin_01 = out_arr_lin_8.astype(np.float32) / 255.0
             out_srgb_01 = DitherUtils.linear_to_srgb(np.clip(out_lin_01, 0, 1))
             out_srgb_8 = np.clip(out_srgb_01 * 255.0, 0, 255).astype(np.uint8)
-            return Image.fromarray(out_srgb_8, 'RGB')
+            result = Image.fromarray(out_srgb_8, 'RGB')
         else:
-            return Image.fromarray(out_arr_lin_8, 'RGB')
+            result = Image.fromarray(out_arr_lin_8, 'RGB')
+
+        if alpha is None:
+            return result
+        # Original alpha copied through verbatim - never dithered, never
+        # thresholded, never renormalized.
+        result.putalpha(Image.fromarray(alpha, 'L'))
+        return result

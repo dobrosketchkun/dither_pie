@@ -24,7 +24,12 @@ from rich import print as rprint
 # Local imports
 from dithering_lib import DitherMode, ImageDitherer, ColorReducer, PixelizeMethod, PaletteSource
 from video_processor import VideoProcessor, NeuralPixelizer, pixelize_regular
-from utils import PaletteManager
+from utils import (
+    PaletteManager,
+    has_actual_transparency,
+    check_save_format,
+    split_alpha,
+)
 from config_manager import ConfigManager
 from PIL import Image
 
@@ -409,19 +414,27 @@ def setup_palette_from_config(palette_config: Dict[str, Any], source_image: Imag
     """
     source = palette_config["source"]
     num_colors = palette_config["num_colors"]
-    
+
     # Check if this is a custom/predefined palette (ignore num_colors)
     is_custom_palette = False
-    
+
+    # The palette is built here and handed to ImageDitherer, which then skips
+    # its own generation - so the opaque mask has to be applied at this level
+    # too, or invisible pixels would still shape the palette.
+    source_rgb, source_alpha = split_alpha(source_image)
+    source_mask = None if source_alpha is None else (source_alpha > 0)
+
     # Built-in palette generation methods (use num_colors from config)
     if source == PaletteSource.MEDIAN_CUT.value:
         logger.info(f"Generating palette: [cyan]{source}[/] ({num_colors} colors)")
-        palette = ColorReducer.reduce_colors(source_image, num_colors)
-        
+        palette = ColorReducer.reduce_colors(source_rgb, num_colors, mask=source_mask)
+
     elif source == PaletteSource.KMEANS.value:
         logger.info(f"Generating palette: [cyan]{source}[/] ({num_colors} colors)")
-        palette = ColorReducer.generate_kmeans_palette(source_image, num_colors, random_state=42)
-        
+        palette = ColorReducer.generate_kmeans_palette(
+            source_rgb, num_colors, random_state=42, mask=source_mask
+        )
+
     elif source == PaletteSource.UNIFORM.value:
         logger.info(f"Generating palette: [cyan]{source}[/] ({num_colors} colors)")
         palette = ColorReducer.generate_uniform_palette(num_colors)
@@ -433,8 +446,15 @@ def setup_palette_from_config(palette_config: Dict[str, Any], source_image: Imag
             raise ConfigValidationError(f"Palette source image not found: {file_path}")
         
         logger.info(f"Extracting palette from: [cyan]{file_path}[/] ({num_colors} colors)")
-        ref_image = Image.open(file_path).convert('RGB')
-        palette = ColorReducer.generate_kmeans_palette(ref_image, num_colors, random_state=42)
+        # A reference image's invisible pixels should not shape the palette any
+        # more than the target image's should.
+        ref_image, ref_alpha = split_alpha(Image.open(file_path))
+        ref_mask = None if ref_alpha is None else (ref_alpha > 0)
+        if ref_mask is not None:
+            logger.info("[dim]Reference has transparency - extracting from opaque pixels only[/]")
+        palette = ColorReducer.generate_kmeans_palette(
+            ref_image, num_colors, random_state=42, mask=ref_mask
+        )
         
     elif source.startswith("custom:"):
         # Load from palette.json (use palette's actual color count)
@@ -498,16 +518,21 @@ def process_single_image(config: Dict[str, Any]) -> bool:
         
         logger.info(f"Loading image: [cyan]{input_path.name}[/]")
         
-        # Load image
-        image = Image.open(input_path).convert('RGB')
+        # Load image. Only images with genuinely non-opaque pixels are kept as
+        # RGBA; a fully-opaque RGBA PNG becomes RGB exactly as before.
+        loaded = Image.open(input_path)
+        image_has_alpha = has_actual_transparency(loaded)
+        image = loaded.convert('RGBA') if image_has_alpha else loaded.convert('RGB')
         original_size = image.size
         logger.info(f"Image size: [cyan]{original_size[0]}x{original_size[1]}[/]")
-        
+        if image_has_alpha:
+            logger.info("[cyan]Transparency detected[/] - alpha will be preserved")
+
         # Pixelization (optional)
         if config["pixelization"]["enabled"]:
             method = config["pixelization"]["method"]
             max_size = config["pixelization"]["max_size"]
-            
+
             if method == PixelizeMethod.NONE.value:
                 logger.info("Skipping pixelization")
                 processed_image = image
@@ -516,6 +541,16 @@ def process_single_image(config: Dict[str, Any]) -> bool:
                 processed_image = pixelize_regular(image, max_size)
                 logger.info(f"[green]✓[/] Pixelized to {processed_image.size[0]}x{processed_image.size[1]}")
             elif method == PixelizeMethod.NEURAL.value:
+                # The neural model is 3-channel and cannot carry alpha. Refuse
+                # rather than silently flattening, matching the GUI which
+                # disables the button outright.
+                if image_has_alpha:
+                    logger.error(
+                        f"Neural pixelization cannot preserve transparency, and "
+                        f"'{input_path.name}' has non-opaque pixels. "
+                        f"Use \"method\": \"regular\" instead."
+                    )
+                    return False
                 logger.info(f"Pixelizing (neural, max_size={max_size})... [dim](this may take a moment)[/]")
                 neural_pix = NeuralPixelizer()
                 processed_image = neural_pix.pixelize(image, max_size)
@@ -569,6 +604,10 @@ def process_single_image(config: Dict[str, Any]) -> bool:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
         # Save result
+        problem = check_save_format(processed_image, output_path)
+        if problem:
+            logger.error(problem)
+            return False
         logger.info(f"Saving to: [cyan]{output_path}[/]")
         processed_image.save(output_path)
         

@@ -574,5 +574,9 @@ def pixelize_regular(image: Image.Image, max_size: int) -> Image.Image:
     orig_w, orig_h = image.size
     target_w, target_h = NeuralPixelizer._compute_even_dimensions(orig_w, orig_h, max_size)
     resized = image.resize((target_w, target_h), Image.Resampling.NEAREST)
+    # NEAREST never blends, so alpha stays exactly as it was - preserve it.
+    # Anything without an alpha channel still comes back as RGB, unchanged.
+    if resized.mode == 'RGBA':
+        return resized
     return resized.convert('RGB')
 

@@ -222,7 +222,11 @@ if _NUMBA_AVAILABLE:
                                offsets: np.ndarray,
                                weights: np.ndarray,
                                divisor: float,
-                               serpentine: bool) -> np.ndarray:
+                               serpentine: bool,
+                               mask_2d) -> np.ndarray:
+        # mask_2d is a uint8 array (1 = real pixel) or None for "all real".
+        # numba specializes per argument type, so the None case compiles with
+        # the mask tests removed entirely.
         h = work_2d.shape[0]
         w = work_2d.shape[1]
         palette_len = palette_arr.shape[0]
@@ -241,6 +245,8 @@ if _NUMBA_AVAILABLE:
                 x_direction = 1
 
             for x in range(x_start, x_end, x_step):
+                if mask_2d is not None and mask_2d[y, x] == 0:
+                    continue
                 r = work_2d[y, x, 0]
                 g = work_2d[y, x, 1]
                 b = work_2d[y, x, 2]
@@ -283,6 +289,11 @@ if _NUMBA_AVAILABLE:
                     nx = x + offsets[k, 0] * x_direction
                     ny = y + offsets[k, 1]
                     if 0 <= nx < w and 0 <= ny < h:
+                        if mask_2d is not None and mask_2d[ny, nx] == 0:
+                            # Weight aimed at a non-pixel is dropped, not
+                            # redistributed - same as Atkinson deliberately
+                            # discarding a share of its error.
+                            continue
                         wgt = weights[k] / divisor
                         work_2d[ny, nx, 0] += err0 * wgt
                         work_2d[ny, nx, 1] += err1 * wgt
@@ -314,6 +325,20 @@ if _NUMBA_AVAILABLE:
         return work_2d
 
 
+def _mask_to_uint8(mask: Optional[np.ndarray], h: int, w: int) -> Optional[np.ndarray]:
+    """
+    Coerce an optional boolean mask into the uint8 array the numba kernels take.
+
+    None is passed straight through rather than expanded to an all-ones array:
+    numba compiles a separate specialization per argument type, so with a
+    literal None the `mask_2d is None` tests inside the kernel fold away at
+    compile time and the opaque path keeps its original instruction stream.
+    """
+    if mask is None:
+        return None
+    return np.ascontiguousarray(mask, dtype=np.uint8)
+
+
 # -------------------- Base Classes for Dithering Strategies --------------------
 
 class BaseDitherStrategy:
@@ -321,9 +346,19 @@ class BaseDitherStrategy:
     Base class for dithering strategies.
     Each strategy must implement a .dither(pixels, palette_arr, image_size) method
     that returns an array of shape (N,3), the same shape as 'pixels'.
+
+    'mask' is an optional (H, W) boolean array marking which pixels are real.
+    Strategies that diffuse error must not quantize a masked-out pixel and must
+    not push error into one - otherwise error crosses the transparency boundary
+    in both directions and corrupts the visible rim of a sprite. Strategies that
+    decide each pixel independently can ignore it entirely; the caller overwrites
+    masked-out pixels afterwards regardless.
+
+    mask=None means "every pixel is real" and must behave exactly as before.
     """
     def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
-               image_size: Tuple[int, int]) -> np.ndarray:
+               image_size: Tuple[int, int],
+               mask: Optional[np.ndarray] = None) -> np.ndarray:
         raise NotImplementedError
     
     @staticmethod
@@ -341,7 +376,8 @@ class NoDitherStrategy(BaseDitherStrategy):
     No dithering at all; simply assign each pixel to its nearest palette color.
     """
     def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
-               image_size: Tuple[int, int]) -> np.ndarray:
+               image_size: Tuple[int, int],
+               mask: Optional[np.ndarray] = None) -> np.ndarray:
         tree = KDTree(palette_arr)
         _, idx = tree.query(pixels, k=1, workers=-1)
         return palette_arr[idx, :]
@@ -359,7 +395,8 @@ class MatrixDitherStrategy(BaseDitherStrategy):
         self.threshold_matrix = threshold_matrix
 
     def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
-               image_size: Tuple[int, int]) -> np.ndarray:
+               image_size: Tuple[int, int],
+               mask: Optional[np.ndarray] = None) -> np.ndarray:
         h, w = image_size
         tree = KDTree(palette_arr)
         # nearest 2 palette colors
@@ -555,7 +592,8 @@ class InterleavedGradientNoiseDitherStrategy(BaseDitherStrategy):
         return self._fract(t * 52.9829189)
 
     def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
-               image_size: Tuple[int, int]) -> np.ndarray:
+               image_size: Tuple[int, int],
+               mask: Optional[np.ndarray] = None) -> np.ndarray:
         h, w = image_size
         tree = KDTree(palette_arr)
 
@@ -635,7 +673,8 @@ class ErrorDiffusionDitherStrategy(BaseDitherStrategy):
         }
     
     def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
-               image_size: Tuple[int, int]) -> np.ndarray:
+               image_size: Tuple[int, int],
+               mask: Optional[np.ndarray] = None) -> np.ndarray:
         h, w = image_size
         work_2d = pixels.reshape((h, w, 3)).astype(np.float32).copy()
         weights = self._kernel['weights']
@@ -652,7 +691,8 @@ class ErrorDiffusionDitherStrategy(BaseDitherStrategy):
                     offsets,
                     weight_vals,
                     float(divisor),
-                    self.serpentine
+                    self.serpentine,
+                    _mask_to_uint8(mask, h, w)
                 )
                 return work_2d.reshape((-1, 3))
             except Exception:
@@ -668,30 +708,34 @@ class ErrorDiffusionDitherStrategy(BaseDitherStrategy):
             else:
                 x_range = range(w)
                 x_direction = 1
-            
+
             for x in x_range:
+                if mask is not None and not mask[y, x]:
+                    continue
                 # Clamp current pixel before palette lookup to avoid runaway drift
                 np.clip(work_2d[y, x], 0, 255, out=work_2d[y, x])
                 old_val = work_2d[y, x].copy()
-                
+
                 # Find nearest palette color
                 _, idx = tree.query(old_val, k=1)
                 chosen = palette_arr[idx]
                 work_2d[y, x] = chosen
-                
+
                 # Calculate error
                 err = old_val - chosen
-                
+
                 # Distribute error using kernel weights
                 for dx, dy, weight in weights:
                     # Adjust dx for serpentine scanning
                     actual_dx = dx * x_direction
                     nx = x + actual_dx
                     ny = y + dy
-                    
+
                     if 0 <= nx < w and 0 <= ny < h:
+                        if mask is not None and not mask[ny, nx]:
+                            continue
                         work_2d[ny, nx] += err * (weight / divisor)
-        
+
         np.clip(work_2d, 0, 255, out=work_2d)
         return work_2d.reshape((-1, 3))
     
@@ -749,7 +793,8 @@ class PolkaDotDitherStrategy(BaseDitherStrategy):
         return np.clip(thresh, 0, 1).astype(np.float32)
 
     def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
-               image_size: Tuple[int, int]) -> np.ndarray:
+               image_size: Tuple[int, int],
+               mask: Optional[np.ndarray] = None) -> np.ndarray:
         h, w = image_size
         tree = KDTree(palette_arr)
         distances, indices = tree.query(pixels, k=2, workers=-1)
@@ -820,7 +865,8 @@ class RiemersmaDitherStrategy(BaseDitherStrategy):
     Hilbert-based error diffusion. Single pass with Floyd–Steinberg-like weights.
     """
     def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
-               image_size: Tuple[int, int]) -> np.ndarray:
+               image_size: Tuple[int, int],
+               mask: Optional[np.ndarray] = None) -> np.ndarray:
         h, w = image_size
         pix_2d = pixels.reshape((h, w, 3)).astype(np.float32).copy()
         tree = KDTree(palette_arr)
@@ -832,6 +878,8 @@ class RiemersmaDitherStrategy(BaseDitherStrategy):
             rr, cc = path[i]
             if rr >= h or cc >= w:
                 continue
+            if mask is not None and not mask[rr, cc]:
+                continue
             old_val = pix_2d[rr, cc].copy()
             _, idx = tree.query(old_val, k=1)
             chosen = palette_arr[idx]
@@ -842,6 +890,8 @@ class RiemersmaDitherStrategy(BaseDitherStrategy):
                 if j < N:
                     rr2, cc2 = path[j]
                     if rr2 < h and cc2 < w:
+                        if mask is not None and not mask[rr2, cc2]:
+                            continue
                         pix_2d[rr2, cc2] += err * weight
                         np.clip(pix_2d[rr2, cc2], 0, 255, out=pix_2d[rr2, cc2])
         return pix_2d.reshape((-1, 3))
@@ -894,7 +944,8 @@ class WaveletDitherStrategy(BaseDitherStrategy):
         return {'wavelet': self.wavelet, 'subband_quant': self.subband_quant, 'seed': self.seed}
 
     def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
-               image_size: Tuple[int, int]) -> np.ndarray:
+               image_size: Tuple[int, int],
+               mask: Optional[np.ndarray] = None) -> np.ndarray:
         h, w = image_size
         rng = np.random.RandomState(self.seed)
         pix_3d = pixels.reshape((h, w, 3)).copy()
@@ -988,7 +1039,8 @@ class AdaptiveVarianceDitherStrategy(BaseDitherStrategy):
         return {'var_threshold': self.var_threshold, 'window_radius': self.window_radius}
 
     def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
-               image_size: Tuple[int, int]) -> np.ndarray:
+               image_size: Tuple[int, int],
+               mask: Optional[np.ndarray] = None) -> np.ndarray:
         h, w = image_size
 
         # Compute a local variance map from grayscale
@@ -1003,6 +1055,8 @@ class AdaptiveVarianceDitherStrategy(BaseDitherStrategy):
 
         for y in range(h):
             for x in range(w):
+                if mask is not None and not mask[y, x]:
+                    continue
                 old_val = work_2d[y, x].copy()
                 _, idx = tree.query(old_val, k=1)
                 chosen = palette_arr[idx]
@@ -1011,13 +1065,14 @@ class AdaptiveVarianceDitherStrategy(BaseDitherStrategy):
 
                 # if local variance is high => do small Floyd–Steinberg distribution
                 if var_map[y, x] >= self.var_threshold:
-                    if x + 1 < w:
+                    ok = mask is None
+                    if x + 1 < w and (ok or mask[y, x + 1]):
                         work_2d[y, x + 1] += err * (7 / 16)
-                    if (y + 1 < h) and (x > 0):
+                    if (y + 1 < h) and (x > 0) and (ok or mask[y + 1, x - 1]):
                         work_2d[y + 1, x - 1] += err * (3 / 16)
-                    if y + 1 < h:
+                    if y + 1 < h and (ok or mask[y + 1, x]):
                         work_2d[y + 1, x] += err * (5 / 16)
-                    if (y + 1 < h) and (x + 1 < w):
+                    if (y + 1 < h) and (x + 1 < w) and (ok or mask[y + 1, x + 1]):
                         work_2d[y + 1, x + 1] += err * (1 / 16)
 
         np.clip(work_2d, 0, 255, out=work_2d)
@@ -1046,7 +1101,8 @@ class PerceptualDitherStrategy(BaseDitherStrategy):
             self.base_weights = base_weights
 
     def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
-               image_size: Tuple[int, int]) -> np.ndarray:
+               image_size: Tuple[int, int],
+               mask: Optional[np.ndarray] = None) -> np.ndarray:
         h, w = image_size
         work_2d = pixels.reshape((h, w, 3)).astype(np.float32).copy()
         gray_2d = 0.299 * work_2d[:, :, 0] + 0.587 * work_2d[:, :, 1] + 0.114 * work_2d[:, :, 2]
@@ -1054,6 +1110,8 @@ class PerceptualDitherStrategy(BaseDitherStrategy):
 
         for y in range(h):
             for x in range(w):
+                if mask is not None and not mask[y, x]:
+                    continue
                 old_val = work_2d[y, x].copy()
                 _, idx = tree.query(old_val, k=1)
                 chosen = palette_arr[idx]
@@ -1066,6 +1124,8 @@ class PerceptualDitherStrategy(BaseDitherStrategy):
                     nx = x + dx
                     ny = y + dy
                     if (0 <= nx < w) and (0 <= ny < h):
+                        if mask is not None and not mask[ny, nx]:
+                            continue
                         work_2d[ny, nx] += err * (wgt * sensitivity)
 
         np.clip(work_2d, 0, 255, out=work_2d)
@@ -1114,7 +1174,8 @@ class HybridDitherStrategy(BaseDitherStrategy):
         return {'lum_factor': self.lum_factor, 'col_factor': self.col_factor}
 
     def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
-               image_size: Tuple[int, int]) -> np.ndarray:
+               image_size: Tuple[int, int],
+               mask: Optional[np.ndarray] = None) -> np.ndarray:
         h, w = image_size
         work_2d = pixels.reshape((h, w, 3)).astype(np.float32).copy()
         
@@ -1125,16 +1186,19 @@ class HybridDitherStrategy(BaseDitherStrategy):
                     work_2d,
                     palette_f,
                     float(self.lum_factor),
-                    float(self.col_factor)
+                    float(self.col_factor),
+                    _mask_to_uint8(mask, h, w)
                 )
                 return work_2d.reshape((-1, 3))
             except Exception:
                 pass
-        
+
         tree = KDTree(palette_arr)
 
         for y in range(h):
             for x in range(w):
+                if mask is not None and not mask[y, x]:
+                    continue
                 old_val = work_2d[y, x].copy()
                 _, idx = tree.query(old_val, k=1)
                 chosen = palette_arr[idx]
@@ -1155,6 +1219,8 @@ class HybridDitherStrategy(BaseDitherStrategy):
                     nx = x + dx
                     ny = y + dy
                     if 0 <= nx < w and 0 <= ny < h:
+                        if mask is not None and not mask[ny, nx]:
+                            continue
                         work_2d[ny, nx] += final_err * weight
         
         np.clip(work_2d, 0, 255, out=work_2d)
@@ -1229,7 +1295,8 @@ class OstromoukhovDitherStrategy(BaseDitherStrategy):
         return {'serpentine': 'true' if self.serpentine else 'false'}
     
     def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
-               image_size: Tuple[int, int]) -> np.ndarray:
+               image_size: Tuple[int, int],
+               mask: Optional[np.ndarray] = None) -> np.ndarray:
         h, w = image_size
         work_2d = pixels.reshape((h, w, 3)).astype(np.float32).copy()
         tree = KDTree(palette_arr)
@@ -1243,6 +1310,8 @@ class OstromoukhovDitherStrategy(BaseDitherStrategy):
                 x_direction = 1
             
             for x in x_range:
+                if mask is not None and not mask[y, x]:
+                    continue
                 # Clamp current pixel before palette lookup to avoid runaway drift
                 np.clip(work_2d[y, x], 0, 255, out=work_2d[y, x])
                 old_val = work_2d[y, x].copy()
@@ -1250,26 +1319,28 @@ class OstromoukhovDitherStrategy(BaseDitherStrategy):
                 chosen = palette_arr[idx]
                 work_2d[y, x] = chosen
                 err = old_val - chosen
-                
+
                 # Get variable coefficients based on pixel intensity (luminance)
                 luminance = 0.299 * old_val[0] + 0.587 * old_val[1] + 0.114 * old_val[2]
                 intensity_idx = int(np.clip(luminance, 0, 255))
                 c0, c1, c2 = self.COEFFS_TABLE[intensity_idx]
                 divisor = c0 + c1 + c2
-                
+
                 if divisor == 0:
                     continue
-                
+
                 # Distribute error
+                ok = mask is None
                 nx = x + x_direction
-                if 0 <= nx < w:
+                if 0 <= nx < w and (ok or mask[y, nx]):
                     work_2d[y, nx] += err * (c0 / divisor)
-                
+
                 if y + 1 < h:
                     nx = x - x_direction
-                    if 0 <= nx < w:
+                    if 0 <= nx < w and (ok or mask[y + 1, nx]):
                         work_2d[y + 1, nx] += err * (c1 / divisor)
-                    work_2d[y + 1, x] += err * (c2 / divisor)
+                    if ok or mask[y + 1, x]:
+                        work_2d[y + 1, x] += err * (c2 / divisor)
         
         np.clip(work_2d, 0, 255, out=work_2d)
         return work_2d.reshape((-1, 3))
@@ -1284,7 +1355,12 @@ if _NUMBA_AVAILABLE:
     def _ostromoukhov_numba(work_2d: np.ndarray,
                             palette_arr: np.ndarray,
                             coeffs: np.ndarray,
-                            serpentine: bool) -> np.ndarray:
+                            serpentine: bool,
+                            mask_2d) -> np.ndarray:
+        # uint8 array (1 = real pixel) or None for "all real".
+        # NOTE: this kernel is currently never called - OstromoukhovDitherStrategy
+        # runs its pure-Python loop. Kept in sync so wiring it up stays a
+        # one-line change.
         h = work_2d.shape[0]
         w = work_2d.shape[1]
         palette_len = palette_arr.shape[0]
@@ -1302,6 +1378,8 @@ if _NUMBA_AVAILABLE:
                 x_direction = 1
             
             for x in range(x_start, x_end, x_step):
+                if mask_2d is not None and mask_2d[y, x] == 0:
+                    continue
                 r = work_2d[y, x, 0]
                 g = work_2d[y, x, 1]
                 b = work_2d[y, x, 2]
@@ -1317,7 +1395,7 @@ if _NUMBA_AVAILABLE:
                     b = 0.0
                 elif b > 255.0:
                     b = 255.0
-                
+
                 best_idx = 0
                 best_dist = 1e20
                 for i in range(palette_len):
@@ -1354,24 +1432,25 @@ if _NUMBA_AVAILABLE:
                     continue
                 
                 nx = x + x_direction
-                if 0 <= nx < w:
+                if 0 <= nx < w and (mask_2d is None or mask_2d[y, nx] != 0):
                     wgt = c0 / divisor
                     work_2d[y, nx, 0] += err0 * wgt
                     work_2d[y, nx, 1] += err1 * wgt
                     work_2d[y, nx, 2] += err2 * wgt
-                
+
                 if y + 1 < h:
                     nx = x - x_direction
-                    if 0 <= nx < w:
+                    if 0 <= nx < w and (mask_2d is None or mask_2d[y + 1, nx] != 0):
                         wgt = c1 / divisor
                         work_2d[y + 1, nx, 0] += err0 * wgt
                         work_2d[y + 1, nx, 1] += err1 * wgt
                         work_2d[y + 1, nx, 2] += err2 * wgt
-                    
-                    wgt = c2 / divisor
-                    work_2d[y + 1, x, 0] += err0 * wgt
-                    work_2d[y + 1, x, 1] += err1 * wgt
-                    work_2d[y + 1, x, 2] += err2 * wgt
+
+                    if mask_2d is None or mask_2d[y + 1, x] != 0:
+                        wgt = c2 / divisor
+                        work_2d[y + 1, x, 0] += err0 * wgt
+                        work_2d[y + 1, x, 1] += err1 * wgt
+                        work_2d[y + 1, x, 2] += err2 * wgt
         
         for y in range(h):
             for x in range(w):
@@ -1404,13 +1483,18 @@ if _NUMBA_AVAILABLE:
     def _hybrid_numba(work_2d: np.ndarray,
                       palette_arr: np.ndarray,
                       lum_factor: float,
-                      col_factor: float) -> np.ndarray:
+                      col_factor: float,
+                      mask_2d) -> np.ndarray:
+        # uint8 array (1 = real pixel) or None for "all real"; see
+        # _error_diffusion_numba for why None rather than an all-ones array.
         h = work_2d.shape[0]
         w = work_2d.shape[1]
         palette_len = palette_arr.shape[0]
 
         for y in range(h):
             for x in range(w):
+                if mask_2d is not None and mask_2d[y, x] == 0:
+                    continue
                 r = work_2d[y, x, 0]
                 g = work_2d[y, x, 1]
                 b = work_2d[y, x, 2]
@@ -1459,19 +1543,20 @@ if _NUMBA_AVAILABLE:
                 fe2 = lum_factor * lum2 + col_factor * (err2 - lum2)
 
                 # Floyd-Steinberg distribution
-                if x + 1 < w:
+                if x + 1 < w and (mask_2d is None or mask_2d[y, x + 1] != 0):
                     work_2d[y, x + 1, 0] += fe0 * (7.0 / 16.0)
                     work_2d[y, x + 1, 1] += fe1 * (7.0 / 16.0)
                     work_2d[y, x + 1, 2] += fe2 * (7.0 / 16.0)
                 if y + 1 < h:
-                    if x - 1 >= 0:
+                    if x - 1 >= 0 and (mask_2d is None or mask_2d[y + 1, x - 1] != 0):
                         work_2d[y + 1, x - 1, 0] += fe0 * (3.0 / 16.0)
                         work_2d[y + 1, x - 1, 1] += fe1 * (3.0 / 16.0)
                         work_2d[y + 1, x - 1, 2] += fe2 * (3.0 / 16.0)
-                    work_2d[y + 1, x, 0] += fe0 * (5.0 / 16.0)
-                    work_2d[y + 1, x, 1] += fe1 * (5.0 / 16.0)
-                    work_2d[y + 1, x, 2] += fe2 * (5.0 / 16.0)
-                    if x + 1 < w:
+                    if mask_2d is None or mask_2d[y + 1, x] != 0:
+                        work_2d[y + 1, x, 0] += fe0 * (5.0 / 16.0)
+                        work_2d[y + 1, x, 1] += fe1 * (5.0 / 16.0)
+                        work_2d[y + 1, x, 2] += fe2 * (5.0 / 16.0)
+                    if x + 1 < w and (mask_2d is None or mask_2d[y + 1, x + 1] != 0):
                         work_2d[y + 1, x + 1, 0] += fe0 * (1.0 / 16.0)
                         work_2d[y + 1, x + 1, 1] += fe1 * (1.0 / 16.0)
                         work_2d[y + 1, x + 1, 2] += fe2 * (1.0 / 16.0)
@@ -1601,7 +1686,8 @@ class HalftoneDitherStrategy(BaseDitherStrategy):
         }
     
     def dither(self, pixels: np.ndarray, palette_arr: np.ndarray,
-               image_size: Tuple[int, int]) -> np.ndarray:
+               image_size: Tuple[int, int],
+               mask: Optional[np.ndarray] = None) -> np.ndarray:
         h, w = image_size
         
         flat_pixels = pixels.astype(np.float32)
@@ -2138,7 +2224,10 @@ class ImageDitherer:
             self.dither_mode = DitherMode.NONE
 
         strategy = self._get_dither_strategy(self.dither_mode)
-        dithered_flat = strategy.dither(flat_pixels, palette_arr, (h, w))
+        # Error-diffusing strategies use the mask to avoid quantizing invisible
+        # pixels and to keep error from crossing the transparency boundary.
+        # Pointwise ones ignore it; either way the snap below has the last word.
+        dithered_flat = strategy.dither(flat_pixels, palette_arr, (h, w), mask=opaque)
         out_arr_lin_8 = dithered_flat.reshape((h, w, 3)).astype(np.uint8)
 
         if opaque is not None:

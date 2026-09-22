@@ -1,12 +1,13 @@
 """Searchable actions and an algorithm gallery rendered by the real library."""
 from functools import lru_cache
+from pathlib import Path
 import tkinter as tk
 
 import customtkinter as ctk
 from PIL import Image
 
-from dithering_lib import DitherMode, ImageDitherer
-from ui.preview_jobs import LatestPreviewJob
+from dithering_lib import DitherMode
+from .modal import Dialog
 from . import theme as T, winchrome
 from .widgets import Btn, Label, make_entry
 
@@ -32,60 +33,38 @@ class Modal(winchrome.StableTitlebar, ctk.CTkToplevel):
 
 @lru_cache(maxsize=1)
 def gallery_images():
-    width, height = 48, 32
-    source = Image.new('RGB', (width, height))
-    source.putdata([(int(x * 255 / (width - 1)),) * 3 for y in range(height) for x in range(width)])
     images = []
     for mode in DitherMode:
-        result = ImageDitherer(num_colors=2, dither_mode=mode,
-            palette=[(0, 0, 0), (255, 255, 255)],
-            dither_params={'size': 32} if mode == DitherMode.BLUE_NOISE else {}).apply_dithering(source)
-        images.append((mode.value, result.resize((192, 128), Image.Resampling.NEAREST)))
+        with Image.open(Path(__file__).parent / 'assets' / 'gallery' / (mode.value + '.png')) as sample:
+            images.append((mode.value, sample.copy()))
     return images
 
 
-class ModeGallery(Modal):
+class ModeGallery(Dialog):
     def __init__(self, app):
-        super().__init__(app, 'Dithering algorithms', '740x580')
+        super().__init__(app, 'Dithering algorithms', size=(740, 580), resizable=True)
         self.app = app
-        self._jobs = LatestPreviewJob()
-        self._poll_id = None
         self._images = []
-        Label(self, 'Algorithms · preview samples', 'h1').pack(anchor='w', padx=20, pady=14)
-        self.status = Label(self, 'Rendering examples…', 'small')
-        self.status.pack(anchor='w', padx=20)
-        self.body = ctk.CTkScrollableFrame(self, fg_color='transparent')
-        self.body.pack(fill='both', expand=True, padx=14, pady=10)
+        self.status = Label(self.footer, 'Default settings; blue-noise sample uses a 32×32 matrix.', 'small')
+        self.status.pack(anchor='w')
+        self.body.grid_rowconfigure(0, weight=1)
+        self.samples = ctk.CTkScrollableFrame(self.body, fg_color='transparent')
+        self.samples.grid(row=0, column=0, sticky='nsew')
         for col in range(3):
-            self.body.grid_columnconfigure(col, weight=1)
-        self._jobs.submit(gallery_images, self._ready, lambda e: self.status.configure(text=str(e)))
-        self._poll()
-        self.show()
-
-    def _poll(self):
-        self._jobs.poll()
-        self._poll_id = self.after(40, self._poll)
+            self.samples.grid_columnconfigure(col, weight=1)
+        self._ready(gallery_images())
 
     def _ready(self, images):
-        self.status.configure(text='Default settings; blue-noise sample uses a smaller 32×32 matrix.')
         for i, (name, image) in enumerate(images):
             photo = ctk.CTkImage(light_image=image, dark_image=image, size=(192, 128))
             self._images.append(photo)
-            Btn(self.body, name, image=photo, compound='top', height=164,
+            Btn(self.samples, name, image=photo, compound='top', height=164,
                 command=lambda n=name: self._choose(n)).grid(row=i // 3, column=i % 3, padx=5, pady=5)
 
     def _choose(self, name):
         self.app.dither_mode.set(name)
         self.app._on_dither_mode_changed(name)
         self.close()
-
-    def close(self):
-        self._jobs.close()
-        if self._poll_id is not None:
-            self.after_cancel(self._poll_id)
-            self._poll_id = None
-        super().close()
-
 
 class CommandPalette(Modal):
     def __init__(self, app):

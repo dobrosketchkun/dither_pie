@@ -1,0 +1,56 @@
+{
+  "none": {
+    "parameters": {},
+    "file": "none.png"
+  },
+  "bayer": {
+    "parameters": {},
+    "file": "bayer.png"
+  },
+  "error_diffusion": {
+    "parameters": {},
+    "file": "error_diffusion.png"
+  },
+  "riemersma": {
+    "parameters": {},
+    "file": "riemersma.png"
+  },
+  "blue_noise": {
+    "parameters": {
+      "size": 32
+    },
+    "file": "blue_noise.png"
+  },
+  "IGN": {
+    "parameters": {},
+    "file": "IGN.png"
+  },
+  "polka_dot": {
+    "parameters": {},
+    "file": "polka_dot.png"
+  },
+  "wavelet": {
+    "parameters": {},
+    "file": "wavelet.png"
+  },
+  "adaptive_variance": {
+    "parameters": {},
+    "file": "adaptive_variance.png"
+  },
+  "perceptual": {
+    "parameters": {},
+    "file": "perceptual.png"
+  },
+  "hybrid": {
+    "parameters": {},
+    "file": "hybrid.png"
+  },
+  "halftone": {
+    "parameters": {},
+    "file": "halftone.png"
+  },
+  "ostromoukhov": {
+    "parameters": {},
+    "file": "ostromoukhov.png"
+  }
+}

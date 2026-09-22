@@ -22,6 +22,7 @@ class Operations:
             return
         self._image_jobs.poll()
         self._preview_jobs.poll()
+        self._palette_jobs.poll()
         self._video_jobs.poll()
         try:
             while True:
@@ -49,13 +50,13 @@ class Operations:
         self._preview_dirty = True
         if self.current_image is None or self._image_busy:
             return
-        if self.live_var.get():
-            self._preview_after = self.after(180, self._on_apply_dithering)
+        if self.live_var.get() and self._preview_enabled_for_source:
+            self._preview_after = self.after(180, lambda: self._on_apply_dithering(activate=False))
         self.set_status('Settings changed — update preview')
 
     def _request_snapshot(self):
         name = self.palette_var.get()
-        colors = None if name in GENERATED else self.palette_mgr.get_palette_colors_rgb(name)
+        colors = self._selected_palette_colors()
         if name not in GENERATED and not colors:
             raise ValueError('Select a nonempty palette.')
         return DitherRequest(self.dither_mode.get(), int(self.colors_entry.get()),
@@ -63,7 +64,7 @@ class Operations:
                              None if colors is None else tuple(colors),
                              dict(self.dither_parameters.get(self.dither_mode.get(), {})))
 
-    def _on_apply_dithering(self):
+    def _on_apply_dithering(self, activate=True):
         self._cancel_preview()
         if self.current_image is None or self._image_busy:
             return
@@ -75,6 +76,7 @@ class Operations:
             self._error(error)
             return
         source = self.pixelized_image or self.current_image
+        self._preview_enabled_for_source = True
         self._preview_dirty = True
         view_revision = self._view_revision
         self.set_status('Generating preview…', 'busy')
@@ -84,8 +86,10 @@ class Operations:
             self.last_gamma = request.gamma
             self._rendered_request = request
             self._preview_dirty = False
-            self.palette_strip.set_colors(self.last_palette)
-            if view_revision == self._view_revision:
+            if request.palette_name in GENERATED:
+                self._generated_palettes[request.palette_name] = self.last_palette
+                self._filter_palettes()
+            if view_revision == self._view_revision and (activate or self.display_state == 'dithered'):
                 self.show_view('Dithered')
             self._update_resize_preview()
             self.set_status('Preview ready')
@@ -142,6 +146,7 @@ class Operations:
         self.dithered_image = self.last_palette = None
         self._rendered_request = None
         self._preview_dirty = False
+        self._preview_enabled_for_source = False
         self.config.update_last_path('video' if self.is_video else 'image', str(path))
         self.config.add_recent_file(str(path))
         self.file_label.configure(text=Path(path).name)
@@ -151,6 +156,7 @@ class Operations:
         self.show_view('Original', fit=True)
         self._update_resize_preview()
         self._refresh_recent()
+        self._refresh_palettes()
         self.set_status(f'Loaded {Path(path).name}')
 
     def load_random_frame(self):
@@ -180,13 +186,16 @@ class Operations:
         def done(image):
             self.pixelized_image = image
             self.dithered_image = None
+            self.last_palette = self._rendered_request = None
+            self._preview_enabled_for_source = False
+            self._preview_dirty = False
             self.last_pixelization_method = method
             self._pixelize_spec = (method.value, size)
             self._update_pixelization_cache(method, size)
-            self.show_view('Pixelized', fit=True)
+            self.show_view('Pixelized')
             self._update_resize_preview()
             self.set_status('Pixelization complete')
-            self._request_preview()
+            self._refresh_palettes()
         self._begin_image_job(compute, done, 'Pixelizing…')
 
     def _on_pixelize_regular(self):
@@ -199,12 +208,26 @@ class Operations:
         if self.current_image is None or self.is_video or self._image_busy:
             return
         self._cancel_preview()
-        super()._on_pixelization_editor()
-        self._pixelize_spec = None  # Hand edits have no automatic video equivalent.
+        from .editor import ModernPixelizationEditor
+        dialog = ModernPixelizationEditor(self, self.current_image, config=self.config,
+                                           alpha_cutoff=self._get_alpha_cutoff())
+        self.wait_window(dialog)
+        if dialog.result_image is None:
+            return
+        result = dialog.result_image
+        self.source_has_alpha = has_actual_transparency(result)
+        self.pixelized_image = result.convert('RGBA' if self.source_has_alpha else 'RGB')
+        self.last_pixelization_method = PixelizeMethod.REGULAR
+        self.pixelization_cache = {'method': 'editor', 'max_size': None,
+            'source_hash': self._compute_image_hash(self.current_image)}
+        self._pixelize_spec = None
+        self.dithered_image = self.last_palette = self._rendered_request = None
+        self._preview_enabled_for_source = self._preview_dirty = False
+        self.show_view('Pixelized')
+        self._update_resize_preview()
+        self._refresh_palettes()
         self._refresh_capabilities()
-        if self.pixelized_image is not None:
-            self.show_view('Pixelized', fit=True)
-            self._request_preview()
+        self.set_status('Pixelization editor applied')
 
     def _use_original(self):
         self._image_jobs.invalidate()
@@ -213,9 +236,12 @@ class Operations:
         self._invalidate_pixelization_cache()
         self._pixelize_spec = None
         self.dithered_image = None
-        self.show_view('Original', fit=True)
+        self._preview_enabled_for_source = False
+        self._preview_dirty = False
+        self.last_palette = self._rendered_request = None
+        self.show_view('Original')
         self._refresh_capabilities()
-        self._request_preview()
+        self._refresh_palettes()
 
     def save_image(self):
         self._commit_numbers()

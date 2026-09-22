@@ -50,11 +50,16 @@ class ImageCanvas(tk.Canvas):
     # -- public ----------------------------------------------------------
 
     def set_image(self, img: Optional[Image.Image], fit=True):
+        previous = self.image_a
+        if not fit and previous is not None and img is not None:
+            # Keep the same scene footprint when alternating resolutions.
+            self.zoom *= previous.width / img.width
         self.image_a = img
         if fit and img is not None:
             self.fit()
         else:
             self.redraw()
+            self._emit_zoom()
 
     def set_compare_image(self, img: Optional[Image.Image]):
         self.image_b = img
@@ -177,12 +182,13 @@ class ImageCanvas(tk.Canvas):
 
         if self.compare and self.image_b is not None:
             b = self.image_b
-            if b.size != img.size:
-                key = (id(b), img.size)
-                if self._aligned_compare is None or self._aligned_compare[0] != key:
-                    self._aligned_compare = (key, b.resize(img.size, Image.NEAREST))
-                b = self._aligned_compare[1]
-            tile_b = b.crop((cx0, cy0, cx1, cy1)).resize((tw, th), resample)
+            # Sample each original independently into the same screen rect.
+            # Downsampling the original to the processed resolution first
+            # would erase exactly the detail the comparison should reveal.
+            box = (cx0 * b.width / img.width, cy0 * b.height / img.height,
+                   cx1 * b.width / img.width, cy1 * b.height / img.height)
+            b_filter = Image.NEAREST if tw >= box[2] - box[0] else Image.LANCZOS
+            tile_b = b.resize((tw, th), b_filter, box=box)
             split_x = int(vw * self.split)
             local = int(round(split_x - (ox + cx0 * self.zoom)))
             local = max(0, min(tw, local))

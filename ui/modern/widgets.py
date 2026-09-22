@@ -93,6 +93,35 @@ class Btn(ctk.CTkButton):
         self.variant = variant
 
 
+class RecentFileButton(Btn):
+    """Fit filenames intentionally, retaining both ends and the extension."""
+    def __init__(self, master, path, command):
+        from pathlib import Path
+        self.filename = Path(path).name
+        super().__init__(master, self.filename, command=command, width=1,
+                         anchor='w')
+        self.configure(font=T.f('body'))
+        Tooltip(self, str(path))
+        self.bind('<Configure>', self._fit_name, add='+')
+
+    def _fit_name(self, _event=None):
+        budget = max(20, self.winfo_width() / self._get_widget_scaling() - 28)
+        text = self.filename
+        if self._font.measure(text) > budget:
+            count = len(text) - 1
+            while count > 2:
+                left = (count + 1) // 2
+                candidate = text[:left] + '…' + text[-(count - left):]
+                if self._font.measure(candidate) <= budget:
+                    text = candidate
+                    break
+                count -= 1
+            else:
+                text = '…'
+        if self.cget('text') != text:
+            self.configure(text=text)
+
+
 class IconBtn(ctk.CTkButton):
     def __init__(self, master, icon: str, command=None, size=32, glyph=15,
                  tooltip: str = None, variant="subtle", **kw):
@@ -522,7 +551,7 @@ class PaletteCard(ctk.CTkFrame):
     """Selectable palette row: name, count, source badge, swatches."""
 
     def __init__(self, master, name: str, colors, badge: str = None,
-                 command: Callable = None, **kw):
+                 command: Callable = None, placeholder='No colors', **kw):
         super().__init__(master, corner_radius=T.R_CARD,
                          fg_color=T.c("card_alt"), border_width=1,
                          border_color=T.c("border"), **kw)
@@ -534,7 +563,7 @@ class PaletteCard(ctk.CTkFrame):
         head.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 0))
         head.grid_columnconfigure(0, weight=1)
         Label(head, name, "strong").grid(row=0, column=0, sticky="w")
-        meta = "%d colors" % len(colors)
+        meta = "%d colors" % len(colors) if colors else placeholder
         if badge:
             meta = badge + " · " + meta
         Label(head, meta, "tiny", T.c("faint")).grid(row=1, column=0,

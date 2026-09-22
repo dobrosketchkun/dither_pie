@@ -12,6 +12,18 @@ from utils import split_alpha, has_actual_transparency
 GENERATED = ('Median Cut', 'K-means', 'Uniform')
 
 
+def generate_palette(source, name, count):
+    rgb, alpha = split_alpha(source)
+    mask = None if alpha is None else alpha > 0
+    if name == 'Uniform':
+        colors = ColorReducer.generate_uniform_palette(count)
+    elif name == 'K-means':
+        colors = ColorReducer.generate_kmeans_palette(rgb, count, random_state=42, mask=mask)
+    else:
+        colors = ColorReducer.reduce_colors(rgb, count, mask=mask)
+    return [tuple(int(v) for v in c) for c in colors]
+
+
 @dataclass(frozen=True)
 class DitherRequest:
     mode: str
@@ -24,14 +36,7 @@ class DitherRequest:
     def render(self, source):
         colors = self.palette
         if colors is None:
-            rgb, alpha = split_alpha(source)
-            mask = None if alpha is None else alpha > 0
-            if self.palette_name == 'Uniform':
-                colors = ColorReducer.generate_uniform_palette(self.count)
-            elif self.palette_name == 'K-means':
-                colors = ColorReducer.generate_kmeans_palette(rgb, self.count, random_state=42, mask=mask)
-            else:
-                colors = ColorReducer.reduce_colors(rgb, self.count, mask=mask)
+            colors = generate_palette(source, self.palette_name, self.count)
         colors = [tuple(int(v) for v in c) for c in colors]
         result = self.ditherer(colors).apply_dithering(source)
         return result, colors

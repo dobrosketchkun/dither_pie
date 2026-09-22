@@ -15,10 +15,12 @@ from ui.palettes import CustomPaletteCreator
 from . import theme as T, winchrome
 from .chrome import WindowChrome, RailButton, Logo
 from .operations import Operations
+from .palette_panel import PalettePanel
+from .preferences import Preferences
 from .dialogs import ModeGallery, CommandPalette
 from .processing import GENERATED
 from .viewer import ImageCanvas
-from .widgets import (Btn, Card, IconBtn, Label, PaletteCard, Segmented, SliderField,
+from .widgets import (Btn, Card, IconBtn, Label, PaletteCard, RecentFileButton, Segmented, SliderField,
                       StatusBar, SwatchStrip, Toggle, make_entry, make_menu)
 
 
@@ -36,45 +38,21 @@ class Viewer(ImageCanvas):
         self.fit()
 
 
-class Preferences(winchrome.StableTitlebar, ctk.CTkToplevel):
-    def __init__(self, app):
-        super().__init__(app)
-        self.title('Preferences')
-        self.geometry('430x300')
-        self.transient(app)
-        self.configure(fg_color=T.c('bg'))
-        Label(self, 'Appearance', 'h1').pack(anchor='w', padx=24, pady=(20, 8))
-        Segmented(self, ['Light', 'Dark', 'System'],
-                  value=app.config.get('theme', 'appearance_mode').capitalize(),
-                  command=app.set_appearance).pack(fill='x', padx=24)
-        Label(self, 'Design system', 'body').pack(anchor='w', padx=24, pady=(18, 6))
-        variable = tk.StringVar(value=T.system_name())
-        make_menu(self, T.SYSTEMS, variable, app.set_design_system).pack(fill='x', padx=24)
-        chrome = Toggle(self, 'Custom title bar', value=app._custom_chrome)
-        chrome.switch.configure(command=lambda: app.set_custom_chrome(chrome.get()))
-        chrome.pack(fill='x', padx=24, pady=14)
-        Btn(self, 'Done', variant='primary', command=self.close).pack(pady=8)
-        self.protocol('WM_DELETE_WINDOW', self.close)
-        self.bind('<Escape>', lambda _: self.close())
-        self.wait_visibility()
-        self.grab_set()
-
-    def close(self):
-        self.grab_release()
-        self.destroy()
 
 
-class ModernApp(Operations, WindowChrome, winchrome.StableTitlebar, DitheringApp):
+class ModernApp(PalettePanel, Operations, WindowChrome, winchrome.StableTitlebar, DitheringApp):
     def __init__(self):
         self._closing = False
         self._shutdown_requested = False
         self._image_jobs = LatestPreviewJob()
         self._preview_jobs = LatestPreviewJob()
+        self._palette_jobs = LatestPreviewJob()
         self._video_jobs = LatestPreviewJob()
         self._progress = SimpleQueue()
         self._cancel_video = threading.Event()
         self._image_busy = self._video_busy = False
         self._preview_dirty = False
+        self._preview_enabled_for_source = False
         self._preview_after = None
         self._palette_search_after = None
         self._rendered_request = None
@@ -205,9 +183,10 @@ class ModernApp(Operations, WindowChrome, winchrome.StableTitlebar, DitheringApp
             if isinstance(path, dict):
                 path = path.get('path', '')
             if path:
-                self._button(self.recent_body, Path(path).name,
+                button = RecentFileButton(self.recent_body, path,
                     lambda p=path: (self.load_video(p) if Path(p).suffix.lower() in
                                     ('.mp4', '.avi', '.mov', '.mkv', '.webm') else self.load_image(p)))
+                button.grid(row=len(self.recent_body.winfo_children()), column=0, sticky='ew', pady=3)
 
     def _build_pixelize(self):
         body = self._card(1, 'Target size', 'crop')
@@ -225,79 +204,11 @@ class ModernApp(Operations, WindowChrome, winchrome.StableTitlebar, DitheringApp
         Label(body, 'Align the source to the grid, convert, then edit with brush, wand, picker and undo/redo.',
               'small', wraplength=245, justify='left').grid(row=4, column=0, pady=8)
 
-    def _build_palette(self):
-        body = self._card(2, 'Colors', 'palette')
-        self.colors_entry = self._number(body, 'Palette size', 2, 64,
-            self.config.get('defaults', 'num_colors'), 1, (1, 256), self._request_preview).entry
-        self.gamma = Toggle(body, 'Gamma correction', 'Mix colors in linear light.',
-            self.config.get('defaults', 'use_gamma'), command=self._request_preview)
-        self.gamma.grid(row=2, column=0, sticky='ew', pady=8)
-        self.gamma_var = self.gamma.var
-        self.palette_var = tk.StringVar(value='Median Cut')
-        self.palette_var.trace_add('write', self._palette_changed)
-        self.palette_menu = make_menu(body, GENERATED, self.palette_var)
-        self.palette_menu.grid(row=3, column=0, sticky='ew', pady=8)
-        self.palette_strip = SwatchStrip(body, [], height=26)
-        self.palette_strip.grid(row=4, column=0, sticky='ew', pady=8)
-        library = self._card(2, 'Palette library', 'palette')
-        self.palette_search = make_entry(library, placeholder='Search palettes')
-        self.palette_search.grid(row=0, column=0, sticky='ew', pady=(0, 8))
-        self.palette_search.bind('<KeyRelease>', self._schedule_palette_search)
-        self.palette_list = ctk.CTkFrame(library, fg_color='transparent')
-        self.palette_list.grid(row=1, column=0, sticky='ew')
-        self.palette_list.grid_columnconfigure(0, weight=1)
-        self.palette_cards = {}
-        tools = self._card(2, 'Manage palettes', 'palette')
-        self._button(tools, 'Create palette', lambda: CustomPaletteCreator(self, self.palette_mgr, self._refresh_palettes))
-        self._button(tools, 'Import from Lospec', lambda: self._import_from_lospec(self, self._refresh_palettes))
-        self._button(tools, 'Extract from image', lambda: self._create_palette_from_image(self, self._refresh_palettes, self.palette_var))
-        self._button(tools, 'Delete custom palette', self._delete_palette)
-        self._button(tools, 'Update preview', self._on_apply_dithering)
-        self._refresh_palettes()
 
-    def _refresh_palettes(self):
-        names = list(GENERATED) + self.palette_mgr.list_palette_names()
-        self.palette_menu.configure(values=names)
-        if self.palette_var.get() not in names:
-            self.palette_var.set(GENERATED[0])
-        self._filter_palettes()
 
-    def _schedule_palette_search(self, _event=None):
-        if self._palette_search_after is not None:
-            self.after_cancel(self._palette_search_after)
-        self._palette_search_after = self.after(120, self._filter_palettes)
 
-    def _filter_palettes(self):
-        self._palette_search_after = None
-        query = self.palette_search.get().strip().lower()
-        entries = [(name, None) for name in GENERATED] + [
-            (name, self.palette_mgr.get_palette_colors_rgb(name)) for name in self.palette_mgr.list_palette_names()]
-        signature = (query, repr(entries))
-        if signature == getattr(self, '_palette_list_signature', None):
-            return
-        self._palette_list_signature = signature
-        for child in self.palette_list.winfo_children():
-            child.destroy()
-        self.palette_cards = {}
-        for name, colors in entries:
-            if query not in name.lower():
-                continue
-            card = PaletteCard(self.palette_list, name, colors or [],
-                'Generated from source' if colors is None else 'Saved palette', self.palette_var.set)
-            card.grid(row=len(self.palette_cards), column=0, sticky='ew', pady=3)
-            card.set_selected(name == self.palette_var.get())
-            self.palette_cards[name] = card
 
-    def _palette_changed(self, *_):
-        for name, card in getattr(self, 'palette_cards', {}).items():
-            card.set_selected(name == self.palette_var.get())
-        self._request_preview()
 
-    def _delete_palette(self):
-        name = self.palette_var.get()
-        if name not in GENERATED and messagebox.askyesno('Delete palette', f'Delete {name}?', parent=self):
-            self.palette_mgr.remove_palette(name)
-            self._refresh_palettes()
 
     def _build_dither(self):
         body = self._card(3, 'Algorithm', 'sliders')
@@ -400,6 +311,9 @@ class ModernApp(Operations, WindowChrome, winchrome.StableTitlebar, DitheringApp
         Btn(controls, '1:1', command=self.image_viewer.actual_size, width=40).pack(side='left')
         self.btn_toggle = IconBtn(controls, 'layers', self.toggle_compare, tooltip='Before / after (C)')
         self.btn_toggle.pack(side='left')
+        self.compare_base = tk.StringVar(value='Pixelized')
+        make_menu(controls, ['Original', 'Pixelized'], self.compare_base,
+                  lambda _: self._update_comparison(), width=105).pack(side='left', padx=4)
         IconBtn(controls, 'grid_fine', self.toggle_grid, tooltip='Pixel grid').pack(side='left')
 
     def _create_status_bar(self):
@@ -430,15 +344,22 @@ class ModernApp(Operations, WindowChrome, winchrome.StableTitlebar, DitheringApp
             return
         self.display_state = state
         self.view_seg.set(name)
-        self.image_viewer.set_compare(False)
         self.image_viewer.set_image(image, fit=fit)
-        self.image_viewer.set_compare_image(self.pixelized_image or self.current_image)
+        self._update_comparison()
+
+    def _update_comparison(self):
+        base = self.current_image
+        if self.display_state == 'dithered' and self.compare_base.get() == 'Pixelized':
+            base = self.pixelized_image or self.current_image
+        self.image_viewer.set_compare_image(base)
+        if self.display_state == 'current':
+            self.image_viewer.set_compare(False)
 
     def toggle_compare(self):
-        if self.dithered_image is not None:
+        if self.dithered_image is not None or self.pixelized_image is not None:
             on = not self.image_viewer.compare
-            if self.display_state != 'dithered':
-                self.show_view('Dithered')
+            if self.display_state == 'current':
+                self.show_view('Dithered' if self.dithered_image is not None else 'Pixelized')
             self.image_viewer.set_compare(on)
 
     def toggle_grid(self):
@@ -495,6 +416,8 @@ class ModernApp(Operations, WindowChrome, winchrome.StableTitlebar, DitheringApp
         for key in ambiguous:
             replacements.pop(key, None)
         def walk(widget):
+            if getattr(widget, '_fixed_accent', False):
+                return
             if hasattr(widget, '_bg_token'):
                 old = widget._bg_token
                 old = tuple(old) if isinstance(old, list) else old
@@ -517,7 +440,11 @@ class ModernApp(Operations, WindowChrome, winchrome.StableTitlebar, DitheringApp
     def _repaint_raw(self):
         self.image_viewer.redraw()
         self.logo.draw()
-        self.palette_strip.redraw()
+        for card in self.palette_cards.values():
+            card.strip.redraw()
+        for child in self.winfo_children():
+            if isinstance(child, Preferences):
+                child.refresh_samples()
 
     def _on_closing(self):
         if self._closing:
@@ -540,7 +467,7 @@ class ModernApp(Operations, WindowChrome, winchrome.StableTitlebar, DitheringApp
             return
         self._closing = True
         self._cancel_video.set()
-        for jobs in (self._image_jobs, self._preview_jobs, self._video_jobs):
+        for jobs in (self._image_jobs, self._preview_jobs, self._video_jobs, self._palette_jobs):
             jobs.close()
         for token in self.tk.call('after', 'info'):
             self.tk.call('after', 'cancel', token)

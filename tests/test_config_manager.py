@@ -62,3 +62,14 @@ class PreferenceTests(unittest.TestCase):
         manager.save()
         loaded = ConfigManager(path)
         self.assertEqual(loaded.get('defaults', 'num_colors'), 8)
+
+    def test_modern_parameters_and_multiplier_survive_reload(self):
+        path = self.root / 'preferences.json'
+        manager = ConfigManager(path)
+        parameters = {'bayer': {'matrix_size': '8x8'}, 'blue-noise': {'seed': 23}}
+        manager.set('modern_gui', 'dither_parameters', value=parameters)
+        manager.set('defaults', 'resize_multiplier', value=7)
+        manager.save()
+        loaded = ConfigManager(path)
+        self.assertEqual(loaded.get('modern_gui', 'dither_parameters'), parameters)
+        self.assertEqual(loaded.get('defaults', 'resize_multiplier'), 7)

@@ -2,7 +2,6 @@
 
 import os
 import ctypes
-import threading
 import tkinter as tk
 from tkinter import messagebox, colorchooser
 import customtkinter as ctk
@@ -10,8 +9,29 @@ from PIL import Image
 import numpy as np
 from typing import List, Tuple, Optional
 from .image_view import ZoomableImage
+from .preview_jobs import LatestPreviewJob
 
 __all__ = ['PixelizationEditorCanvas', 'PixelizationEditorDialog']
+
+
+def sample_editor_grid(source, grid_w, grid_h, transform, grid_rect, alpha_cutoff):
+    """Sample a captured grid/source transform without touching Tk."""
+    origin_x, origin_y, scale = transform
+    grid_x, grid_y, _, _, cell = grid_rect
+    img_arr = np.array(source)
+    img_h, img_w = img_arr.shape[:2]
+    has_alpha = img_arr.shape[2] == 4
+    pixels = [[None for _ in range(grid_w)] for _ in range(grid_h)]
+    for j in range(grid_h):
+        for i in range(grid_w):
+            cx, cy = grid_x + (i + .5) * cell, grid_y + (j + .5) * cell
+            ox, oy = int(round((cx - origin_x) / scale)), int(round((cy - origin_y) / scale))
+            if ox < 0 or oy < 0 or ox >= img_w or oy >= img_h:
+                continue
+            if has_alpha and img_arr[oy, ox, 3] <= alpha_cutoff:
+                continue
+            pixels[j][i] = tuple(int(v) for v in img_arr[oy, ox, :3])
+    return pixels
 
 
 class PixelizationEditorCanvas(ZoomableImage):
@@ -567,6 +587,8 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
         # everything that is not fully transparent.
         self.alpha_cutoff = max(0, min(255, int(alpha_cutoff)))
         self.result_image = None
+        self._conversion_jobs = LatestPreviewJob()
+        self._conversion_after = None
         self.grid_w = 1
         self.grid_h = 1
         self._alt_pick_active = False
@@ -814,6 +836,8 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
             grid_h = max(1, int(round((img_h / img_w) * target)))
         self.grid_w = grid_w
         self.grid_h = grid_h
+        self._conversion_jobs.invalidate()
+        self.convert_button.configure(state="normal", text="Pixelize")
         self.canvas.set_grid(grid_w, grid_h)
         self.grid_label.configure(text=f"Grid: {grid_w} x {grid_h}")
         self._set_edit_controls_state(False)
@@ -904,8 +928,9 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
             self._set_tool(self.canvas.tool)
 
     def _start_conversion(self):
+        self._set_edit_controls_state(False)
         self.convert_button.configure(state="disabled", text="Pixelizing...")
-        threading.Thread(target=self._convert, daemon=True).start()
+        self._convert()
 
     def _convert(self):
         rect = self.canvas._get_image_draw_rect()
@@ -920,29 +945,26 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
         if not grid_rect:
             self.after(0, lambda: self._conversion_done(None, "Grid not ready yet."))
             return
-        origin_x, origin_y, scale = transform
-        grid_x, grid_y, _, _, cell = grid_rect
-        img_arr = np.array(self.source_image)
-        img_h, img_w = img_arr.shape[0], img_arr.shape[1]
-        has_alpha = img_arr.shape[2] == 4
-        pixels = [[None for _ in range(self.grid_w)] for _ in range(self.grid_h)]
-        for j in range(self.grid_h):
-            for i in range(self.grid_w):
-                cx = grid_x + (i + 0.5) * cell
-                cy = grid_y + (j + 0.5) * cell
-                ox = int(round((cx - origin_x) / scale))
-                oy = int(round((cy - origin_y) / scale))
-                if ox < 0 or oy < 0 or ox >= img_w or oy >= img_h:
-                    continue
-                if has_alpha and img_arr[oy, ox, 3] <= self.alpha_cutoff:
-                    # Grid sampling is a point sample, so a faint anti-aliased
-                    # edge pixel would otherwise land as a fully opaque one -
-                    # the white halo around a soft-edged sprite. Treat anything
-                    # at or below the cutoff as absent instead.
-                    continue
-                r, g, b = img_arr[oy, ox, 0:3]
-                pixels[j][i] = (int(r), int(g), int(b))
-        self.after(0, lambda: self._conversion_done(pixels, None))
+        source, width, height, cutoff = self.source_image, self.grid_w, self.grid_h, self.alpha_cutoff
+        self._conversion_jobs.submit(
+            lambda: sample_editor_grid(source, width, height, transform, grid_rect, cutoff),
+            lambda pixels: self._conversion_done(pixels, None),
+            lambda error: self._conversion_done(None, str(error)))
+        if self._conversion_after is None:
+            self._poll_conversion()
+
+    def _poll_conversion(self):
+        self._conversion_after = None
+        self._conversion_jobs.poll()
+        if self._conversion_jobs._running or self._conversion_jobs._pending:
+            self._conversion_after = self.after(30, self._poll_conversion)
+
+    def destroy(self):
+        self._conversion_jobs.close()
+        if self._conversion_after is not None:
+            self.after_cancel(self._conversion_after)
+            self._conversion_after = None
+        super().destroy()
 
     def _conversion_done(self, pixels, _message):
         if pixels is None:
@@ -982,10 +1004,10 @@ class PixelizationEditorDialog(ctk.CTkToplevel):
         self.bind("<Control-z>", _undo)
         self.bind("<Control-y>", _redo)
         self.bind("<Control-Shift-Z>", _redo)
-        self.bind_all("<KeyPress-Alt_L>", self._on_alt_down)
-        self.bind_all("<KeyPress-Alt_R>", self._on_alt_down)
-        self.bind_all("<KeyRelease-Alt_L>", self._on_alt_up)
-        self.bind_all("<KeyRelease-Alt_R>", self._on_alt_up)
+        self.bind("<KeyPress-Alt_L>", self._on_alt_down)
+        self.bind("<KeyPress-Alt_R>", self._on_alt_down)
+        self.bind("<KeyRelease-Alt_L>", self._on_alt_up)
+        self.bind("<KeyRelease-Alt_R>", self._on_alt_up)
 
     def _is_active_dialog(self) -> bool:
         widget = self.focus_get()

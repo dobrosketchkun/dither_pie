@@ -40,6 +40,7 @@ class ConfigManager:
             "dither_mode": "bayer",
             "use_gamma": False,
             "final_resize_enabled": False,
+            "resize_multiplier": 2,
             "final_size": 1920,
             # Pixelization editor: source pixels with alpha below this are
             # sampled as absent rather than as opaque color. 0 keeps every
@@ -124,6 +125,9 @@ class ConfigManager:
         Recursively merge loaded config with defaults.
         Ensures all default keys exist even if not in loaded config.
         """
+        # Empty maps are extensible settings (e.g. per-algorithm parameters).
+        if not default:
+            return deepcopy(loaded)
         for key, value in default.items():
             if key in loaded:
                 if isinstance(value, dict) and isinstance(loaded[key], dict):

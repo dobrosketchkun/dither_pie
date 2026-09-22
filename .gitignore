@@ -26,6 +26,10 @@ misc/old/
 !misc/main_window.png
 !misc/pallete_and_dither.png
 !misc/pallete_dialogue.png
+!misc/new_GUI.png
 config.json
 .vscode/settings.json
 TODO
+
+# GUI modernization prototype (throwaway)
+_gui_preview/

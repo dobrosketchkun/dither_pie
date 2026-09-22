@@ -395,6 +395,13 @@ User preferences automatically saved to `config.json` when using GUI mode:
 - Subtitle track support
 - H.264 encoding with yuv420p
 - Even dimension enforcement (codec compatibility)
+- Bounded frame streaming with one persistent worker pool
+- Existing output preserved if processing fails or is interrupted
+
+Variable-frame-rate input is resampled to its average frame rate. Audio and subtitle
+streams are copied when compatible with the destination container; codec/container
+mismatches fail with FFmpeg diagnostics. Temporary files contain compressed video,
+not an extracted PNG for every frame.
 
 
 ### Video Workflow
@@ -528,4 +535,4 @@ Neural pixelization models from:
 ## Development
 
 See [DEVELOPMENT.md](DEVELOPMENT.md) for module ownership, environment setup,
-regression tests, and the follow-up reliability work.
+regression tests, and processing behavior.

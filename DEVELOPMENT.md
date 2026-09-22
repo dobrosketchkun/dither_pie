@@ -22,12 +22,16 @@ the dithering library falls back to its Python implementations when unavailable.
 
 The tests generate small images in temporary directories. They cover all dithering
 modes, alpha preservation, palette masking, CLI image processing and validation,
-frame workers, command-line entry points, and GUI helpers. They do not open GUI
-windows, download weights, or process the user's media.
+frame workers, command-line entry points, and GUI helpers. Preview workflow tests
+use simulated widgets and slow background jobs; they check Apply/Cancel and
+settings changes without opening windows. When FFmpeg and ffprobe are available,
+the video tests generate tiny clips to check streaming, audio/subtitles, rotation,
+variable and fractional rates, interruption, and cleanup. They do not download
+weights or process the user's media.
 
-Interactive dialog behavior and full neural/video rendering still require separate
-checks. Passing this suite is a regression baseline, not a claim that all existing
-bugs have been fixed.
+Visual GUI behavior and actual neural inference still require separate checks.
+The neural video test uses a substitute model to verify model reuse and scheduling;
+it does not validate model weights or GPU behavior.
 
 ## Module ownership
 
@@ -46,6 +50,7 @@ bugs have been fixed.
 | `ui/palettes.py` | Palette widgets and palette creation dialogs |
 | `ui/dither_settings.py` | Algorithm parameter dialog |
 | `ui/status.py` | Status bar and progress dialog |
+| `ui/preview_jobs.py` | Latest-request preview scheduling, independent of Tk |
 | `utils.py` | Palette storage/import and file-format helpers |
 
 `gui_components.py` re-exports the original public GUI classes. Configuration
@@ -56,19 +61,39 @@ Processing-job configuration and GUI preferences are separate concerns: the form
 describes a requested operation, while the latter stores interface state and defaults.
 Do not make processing validation depend on a running window or CLI logger.
 
-## Follow-up reliability work
+## Reliability behavior
 
-Keep behavior changes separate from structural moves and add a regression case for
-each fix. The initial review identified these follow-ups:
+- Palettes remain in sRGB. Gamma processing uses floating-point linear values until
+  final encoding, preserving the selected palette's exact RGB values and alpha.
+- Previews allow one active job and one replaceable pending request. Workers never
+  access Tk; the UI thread polls results and rejects stale work. Apply waits for
+  the selected result, and closing the dialog invalidates outstanding work.
+- Job validation normalizes integer strings, rejects fractions/booleans as integer
+  settings, and requires pixelization sizes of at least 2. Validation leaves the
+  caller's configuration unchanged.
+- Batches return success only when all files succeed. Interruption stops the batch
+  and propagates to the CLI's exit code 130; partial failure exits with code 1.
+- Video metadata comes from named ffprobe JSON fields, including exact rational
+  frame rates and displayed dimensions after rotation. Invalid essential metadata
+  produces an error instead of invented values.
+- Video frames flow through FFmpeg pipes in bounded batches. One CPU worker pool
+  is reused per video; neural inference stays in the calling process with one model.
+  The batch limit targets at most 64 MiB of input/output pixel payloads (or one frame
+  if larger); process overhead and algorithm workspaces are additional.
+- Video input with variable frame timing is resampled to its average frame rate.
+  Constant fractional rates are preserved exactly. Original variable timestamps
+  are not retained. Audio/subtitles are copied when the destination container
+  supports their codecs, trimmed to the rendered video duration.
+- Only compressed intermediate video and mux output are staged on disk. The output
+  is replaced after success. Failed frames fail the operation instead of silently
+  substituting frozen frames. Errors and interruption reap workers/FFmpeg and remove
+  staging files, preserving an existing destination.
 
-- Correct palette handling and precision in gamma mode.
-- Queue the latest preview request and reject stale results when settings change.
-- Normalize validated numbers and reject unsupported size boundaries.
-- Return failure for partially failed or interrupted batches.
-- Parse named ffprobe fields rather than guessing duration/frame count by magnitude.
-- Reuse video workers and replace whole-video PNG extraction with bounded streaming.
-- Make redirected CLI help safe on Windows legacy encodings. Its existing Unicode
-  banner fails under CP1252; the entry-point smoke tests explicitly use UTF-8 mode.
+Keep future behavior changes separate from structural moves and add a regression
+case for each fix.
 
-The structural refactor intentionally preserves these existing behaviors so its
-commits can be reviewed independently of the fixes.
+## Remaining checks
+
+Redirected CLI help still needs a Windows legacy-encoding fix: its existing Unicode
+banner fails under CP1252, so entry-point smoke tests explicitly use UTF-8 mode.
+Interactive visual QA and real neural/GPU inference are outside the automated suite.

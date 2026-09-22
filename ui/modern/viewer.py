@@ -28,6 +28,7 @@ class ImageCanvas(tk.Canvas):
         self.show_pixel_grid = True
 
         self.zoom = 1.0
+        self._zoom_reference_width = None
         self.off_x = 0.0
         self.off_y = 0.0
 
@@ -51,6 +52,8 @@ class ImageCanvas(tk.Canvas):
 
     def set_image(self, img: Optional[Image.Image], fit=True):
         previous = self.image_a
+        if img is not None and (fit or self._zoom_reference_width is None):
+            self._zoom_reference_width = img.width
         if not fit and previous is not None and img is not None:
             # Keep the same scene footprint when alternating resolutions.
             self.zoom *= previous.width / img.width
@@ -97,9 +100,13 @@ class ImageCanvas(tk.Canvas):
     def zoom_by(self, factor: float):
         if self.image_a is None:
             return
-        self.zoom = max(0.02, min(64.0, self.zoom * factor))
+        self.zoom = self._bounded_zoom(self.zoom * factor)
         self.redraw()
         self._emit_zoom()
+
+    def _bounded_zoom(self, value):
+        scale = (self._zoom_reference_width or self.image_a.width) / self.image_a.width
+        return max(0.02 * scale, min(64.0 * scale, value))
 
     # -- painting --------------------------------------------------------
 
@@ -189,6 +196,9 @@ class ImageCanvas(tk.Canvas):
                    cx1 * b.width / img.width, cy1 * b.height / img.height)
             b_filter = Image.NEAREST if tw >= box[2] - box[0] else Image.LANCZOS
             tile_b = b.resize((tw, th), b_filter, box=box)
+            if tile.mode == 'RGBA' or tile_b.mode == 'RGBA':
+                tile = tile.convert('RGBA')
+                tile_b = tile_b.convert('RGBA')
             split_x = int(vw * self.split)
             local = int(round(split_x - (ox + cx0 * self.zoom)))
             local = max(0, min(tw, local))
@@ -310,7 +320,7 @@ class ImageCanvas(tk.Canvas):
         sx = (e.x - ox) / self.zoom
         sy = (e.y - oy) / self.zoom
         factor = 1.15 if e.delta > 0 else 1 / 1.15
-        self.zoom = max(0.02, min(64.0, self.zoom * factor))
+        self.zoom = self._bounded_zoom(self.zoom * factor)
         vw, vh = max(1, self.winfo_width()), max(1, self.winfo_height())
         dw, dh = self.image_a.width * self.zoom, self.image_a.height * self.zoom
         self.off_x = e.x - sx * self.zoom - (vw - dw) / 2

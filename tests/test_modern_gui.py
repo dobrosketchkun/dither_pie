@@ -5,6 +5,7 @@ import time
 import shutil
 import subprocess
 import unittest
+import gc
 from unittest.mock import patch
 
 from PIL import Image
@@ -15,12 +16,15 @@ from ui.modern.app import ModernApp, Preferences
 from ui.modern.dialogs import ModeGallery, CommandPalette
 from ui.modern.processing import DitherRequest
 from ui.pixelization_editor import PixelizationEditorDialog
+from ui.modern.editor import ModernPixelizationEditor
 from utils import PaletteManager
 from video_processor import VideoProcessor
 
 
 class ModernGUITests(unittest.TestCase):
     def setUp(self):
+        # Collect widgets from preceding test roots on Tk's owning thread.
+        gc.collect()
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
@@ -44,7 +48,7 @@ class ModernGUITests(unittest.TestCase):
 
     def finish(self):
         until = time.monotonic() + 30
-        jobs = (self.app._image_jobs, self.app._preview_jobs, self.app._video_jobs)
+        jobs = (self.app._image_jobs, self.app._preview_jobs, self.app._video_jobs, self.app._palette_jobs)
         while any(j._running or j._pending for j in jobs) or self.app._preview_after is not None:
             self.assertLess(time.monotonic(), until, 'Job timed out')
             self.pump()
@@ -102,11 +106,8 @@ class ModernGUITests(unittest.TestCase):
         self.assertEqual(field.get(), 33)
 
     def test_gallery_and_command_palette_use_real_actions(self):
-        gallery = ModeGallery(self.app)
-        deadline = time.monotonic() + 30
-        while gallery._jobs._running:
-            self.assertLess(time.monotonic(), deadline)
-            self.pump()
+        with patch('dithering_lib.ImageDitherer.apply_dithering', side_effect=AssertionError('Gallery must be pre-rendered')):
+            gallery = ModeGallery(self.app)
         self.assertEqual(len(gallery._images), len(list(DitherMode)))
         gallery._choose(DitherMode.NONE.value)
         self.assertEqual(self.app.dither_mode.get(), DitherMode.NONE.value)
@@ -124,6 +125,8 @@ class ModernGUITests(unittest.TestCase):
         visited = []
         def apply_editor():
             dialog = next(w for w in app.winfo_children() if isinstance(w, PixelizationEditorDialog))
+            self.assertIsInstance(dialog, ModernPixelizationEditor)
+            self.assertTrue(dialog._head.winfo_ismapped())
             visited.append(dialog)
             dialog.grid_w, dialog.grid_h = 2, 2
             dialog.canvas.set_grid(2, 2)
@@ -141,7 +144,7 @@ class ModernGUITests(unittest.TestCase):
         from threading import get_ident
         from ui.pixelization_editor import sample_editor_grid
         source = self.load()
-        dialog = PixelizationEditorDialog(self.app, source, config=self.config, alpha_cutoff=128)
+        dialog = ModernPixelizationEditor(self.app, source, config=self.config, alpha_cutoff=128)
         self.pump(.2)
         owner = get_ident()
         calls = []
@@ -163,6 +166,12 @@ class ModernGUITests(unittest.TestCase):
         self.assertTrue(calls)
         self.assertNotEqual(calls[0], owner)
         self.assertTrue(dialog.canvas.get_pixel_data())
+        dialog.target_field._on_type()
+        self.assertEqual(dialog.canvas.mode, 'edit', 'Unchanged size must not discard edits')
+        self.assertLess(dialog.target_size_entry.winfo_rootx() + dialog.target_size_entry.winfo_width(),
+                        dialog.canvas.winfo_rootx())
+        self.assertLess(dialog.apply_button.winfo_rooty() + dialog.apply_button.winfo_height(),
+                        dialog.winfo_rooty() + dialog.winfo_height())
         dialog._start_conversion()
         dialog._on_cancel()
         self.pump(.2)
@@ -172,16 +181,19 @@ class ModernGUITests(unittest.TestCase):
         app = self.app
         self.assertEqual(self.config.get('theme', 'appearance_mode'), 'light')
         app.open_settings()
-        self.pump()
+        self.pump(.2)
         dialog = next(w for w in app.winfo_children() if isinstance(w, Preferences))
         app.set_appearance('Dark')
         app.set_design_system('Swiss Grid')
         self.pump()
         self.assertTrue(dialog.winfo_viewable())
+        from ui.modern import theme
+        self.assertEqual(set(dialog._system_swatches), set(theme.SYSTEMS))
+        self.assertTrue(all(len(swatches) == 3 for swatches in dialog._system_swatches.values()))
         self.assertIs(app.grab_current(), dialog)
         dialog.close()
         app.open_settings()
-        self.pump()
+        self.pump(.2)
         app.grab_current().close()
         app._on_closing()
         loaded = ConfigManager(str(self.root / 'config.json'))
@@ -237,6 +249,85 @@ class ModernGUITests(unittest.TestCase):
             self.finish()
         self.assertIsNone(app.dithered_image)
         self.assertEqual(app.current_image.size, (10, 10))
+
+    def test_new_source_pixelization_does_not_reapply_previous_dither(self):
+        self.load()
+        app = self.app
+        app.palette_var.set('Test')
+        app._on_apply_dithering()
+        self.finish()
+        self.assertIsNotNone(app.dithered_image)
+        app._source_loaded(Image.new('RGB', (60, 40), 'red'), self.root / 'next.png')
+        app._on_pixelize_regular()
+        self.finish()
+        self.assertIsNotNone(app.pixelized_image)
+        self.assertIsNone(app.dithered_image)
+        self.assertIsNone(app.last_palette)
+        self.assertFalse(app._preview_enabled_for_source)
+        app.gamma_var.set(not app.gamma_var.get())
+        app._request_preview()
+        self.finish()
+        self.assertIsNone(app.dithered_image)
+
+    def test_view_switches_preserve_scene_size_pan_and_comparison(self):
+        self.load()
+        app = self.app
+        viewer = app.image_viewer
+        viewer.off_x, viewer.off_y = 25, -12
+        original_width = viewer.image_a.width * viewer.zoom
+        app.pixelized_image = app.current_image.resize((6, 4), Image.Resampling.NEAREST)
+        app.show_view('Pixelized')
+        app.toggle_compare()
+        self.assertTrue(viewer.compare)
+        self.assertEqual(viewer.image_b.size, (24, 16))
+        for _ in range(4):
+            app.show_view('Original')
+            app.show_view('Pixelized')
+            self.assertAlmostEqual(viewer.image_a.width * viewer.zoom, original_width)
+            self.assertEqual((viewer.off_x, viewer.off_y), (25, -12))
+        viewer.zoom = 80
+        viewer.zoom_by(1.15)
+        self.assertAlmostEqual(viewer.zoom, 92)
+        self.pump()
+
+    def test_comparison_samples_original_detail_and_alpha(self):
+        from PIL import ImageTk
+        viewer = self.app.image_viewer
+        viewer.show_pixel_grid = False
+        original = Image.new('RGBA', (64, 64), (0, 0, 0, 0))
+        original.paste('red', (10, 10, 11, 11))
+        viewer.set_image(Image.new('RGB', (2, 2), 'white'), fit=False)
+        viewer.zoom = 64
+        viewer.set_compare_image(original)
+        viewer.set_compare(True)
+        viewer.split = 1
+        viewer._render()
+        rendered = ImageTk.getimage(viewer._photo)
+        self.assertEqual(rendered.getpixel((20, 20))[:3], (255, 0, 0))
+        self.assertNotEqual(rendered.getpixel((0, 0))[:3], (0, 0, 0))
+
+    def test_palette_cards_have_real_swatches_and_category_filters(self):
+        self.load()
+        app = self.app
+        self.assertTrue(all(app._generated_palettes.values()))
+        self.assertFalse(hasattr(app, 'palette_menu'))
+        app.palette_filter.set('Mine', notify=True)
+        self.assertEqual(set(app.palette_cards), {'Test'})
+        app.palette_filter.set('Library', notify=True)
+        self.assertTrue(app.palette_cards)
+        self.assertNotIn('Test', app.palette_cards)
+
+    def test_recent_filename_fits_with_extension(self):
+        from ui.modern.widgets import RecentFileButton
+        name = '3b4848fda6de964b34ba606077fb04e60f4246b.jpg'
+        button = RecentFileButton(self.app, self.root / name, lambda: None)
+        button.place(x=30, y=90)
+        button.configure(width=200)
+        self.pump()
+        self.assertIn('…', button.cget('text'))
+        self.assertTrue(button.cget('text').endswith('.jpg'))
+        self.assertLess(button._font.measure(button.cget('text')), 180)
+        button.destroy()
 
 
 if __name__ == '__main__':

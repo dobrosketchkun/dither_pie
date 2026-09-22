@@ -11,7 +11,7 @@ Production must never import `_gui_preview`.
 | Source | Image decoding, real transparency detection, recent paths, video first/random frames | Source panel; real files, no generated scene or invented video metadata |
 | Pixelization | Shared nearest-neighbor implementation, even dimensions based on the **shorter** edge, optional neural model | Label the real size semantics; do not copy mockup's longest-edge resize |
 | Neural | Lazy model loading; disallow transparent inputs | Preserve capability gating and surface errors |
-| Editor setup | Target grid, source pan/zoom, fit-to-grid, alpha cutoff, conversion | Use `ui.pixelization_editor.PixelizationEditorDialog`, never the prototype editor |
+| Editor setup | Target grid, source pan/zoom, fit-to-grid, alpha cutoff, conversion | New styled controls in `ui.modern.editor`, backed by the production canvas and conversion lifecycle |
 | Editor tools | Brush strokes/interpolation, connected wand replacement, color picker, Alt picker, right-click/Shift pan, grid, undo/redo | Retain production canvas and shortcuts |
 | Editor result | Missing cells become transparent RGBA; apply/cancel; geometry and tool preferences | Preserve result alpha, invalidate previous dithering and cache |
 | Palette | Generated median-cut/k-means/uniform, persistent custom palettes, Lospec import, extraction from another image | Real palette manager and existing creation/import workflows |
@@ -49,15 +49,25 @@ contracts, while `operations.py` handles snapshot-based background jobs and
 import prototype files or mode definitions.
 
 The palette library is searchable, parameters come from `ImageDitherer`, and
-gallery examples run the real algorithms. Unsupported prototype codec, CRF,
+gallery examples are generated offline by `tools/generate_gallery.py` using the
+real algorithms and shipped as PNGs. Opening the gallery never runs processing.
+Unsupported prototype codec, CRF,
 fake video timeline, clipboard and cache controls are omitted. Video workers,
 upscaling, cancellation and exports perform real work.
 
-The editor's canvas, sampling, editing history, shortcuts and RGBA result remain
-the production implementation. Conversion now captures Tk geometry on the UI
+The editor uses the modern custom header, card sidebar and footer. Its canvas,
+sampling, editing history, shortcuts and RGBA result remain the production
+implementation. Conversion captures Tk geometry on the UI
 thread and samples in a worker; closing the editor discards pending results.
 Alt-picker bindings belong to the dialog rather than remaining global after it
 closes. Grid resizing invalidates an older conversion.
+
+Palette cards retain the prototype layout, category filters and real swatches.
+Preferences retain its theme cards and color samples. Long recent filenames use
+middle ellipsis with the full path available on hover. Dithering is explicitly
+activated per source and reset by pixelization. Switching preview resolutions
+preserves the scene footprint and pan; comparison resamples each original source
+directly rather than reducing the baseline to the processed image's resolution.
 
 Integration coverage includes every mode's parameter UI, transparent image
 processing and saving, editor apply/cancel and worker lifecycle, modal theme

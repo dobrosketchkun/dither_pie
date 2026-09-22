@@ -42,7 +42,7 @@ class ModernPixelizationEditor(winchrome.StableTitlebar, PixelizationEditorDialo
         self.canvas.set_mode('preview')
         self.canvas.set_show_grid(True)
 
-        grid = Card(sidebar, 'Grid')
+        grid = Card(sidebar, 'Grid', 'grid_fine')
         grid.pack(fill='x', pady=(0, 10))
         self.target_field = SliderField(grid.body, 'Shorter edge', 8, 256,
             self._get_config_value('target_size', 64), step=1, typed_bounds=(1, None),
@@ -54,10 +54,10 @@ class ModernPixelizationEditor(winchrome.StableTitlebar, PixelizationEditorDialo
         Label(grid.body, 'Position the source in the grid,\nthen pixelize to enable editing.', 'small').pack(anchor='w', pady=(0, 8))
         self.fit_to_grid_button = Btn(grid.body, 'Fit source to grid', command=self.canvas.fit_image_to_grid)
         self.fit_to_grid_button.pack(fill='x', pady=(0, 6))
-        self.convert_button = Btn(grid.body, 'Pixelize', command=self._start_conversion)
+        self.convert_button = Btn(grid.body, 'Pixelize', variant='primary', command=self._start_conversion)
         self.convert_button.pack(fill='x')
 
-        tools = Card(sidebar, 'Tools')
+        tools = Card(sidebar, 'Tools', 'pencil')
         tools.pack(fill='x', pady=(0, 10))
         row = ctk.CTkFrame(tools.body, fg_color='transparent')
         row.pack(fill='x')
@@ -73,8 +73,11 @@ class ModernPixelizationEditor(winchrome.StableTitlebar, PixelizationEditorDialo
             step=1, typed_bounds=(1, None), command=self._size_changed)
         self.size_field.pack(fill='x', pady=10)
         self.tool_size_entry = self.size_field.entry
-        self.color_button = Btn(tools.body, 'Drawing color', command=self._pick_color)
-        self.color_button.pack(fill='x', pady=(0, 10))
+        color_row = ctk.CTkFrame(tools.body, fg_color='transparent')
+        color_row.pack(fill='x', pady=(0, 10))
+        Label(color_row, 'Color', 'small', T.c('dim')).pack(side='left')
+        self.color_button = Btn(color_row, '', width=60, command=self._pick_color)
+        self.color_button.pack(side='right')
         self._set_draw_color_from_hex('#000000')
         self.magic_threshold = tk.IntVar(value=self._get_config_value('magic_wand_threshold', 5))
         self.threshold_field = SliderField(tools.body, 'Wand threshold', 0, 30, self.magic_threshold.get(),
@@ -84,7 +87,7 @@ class ModernPixelizationEditor(winchrome.StableTitlebar, PixelizationEditorDialo
         self.magic_label = self.threshold_field.value_label
         self._magic_label_color = self.magic_label.cget('text_color')
 
-        view = Card(sidebar, 'View & history')
+        view = Card(sidebar, 'View & history', 'eye')
         view.pack(fill='x')
         self.grid_toggle_var = tk.BooleanVar(value=self._get_config_value('grid_visible', True))
         self.grid_toggle = ctk.CTkSwitch(view.body, text='Pixel grid', variable=self.grid_toggle_var,
@@ -99,8 +102,8 @@ class ModernPixelizationEditor(winchrome.StableTitlebar, PixelizationEditorDialo
         self.redo_button.pack(side='left', fill='x', expand=True)
         footer = ctk.CTkFrame(self, fg_color='transparent')
         footer.grid(row=2, column=0, sticky='ew', padx=18, pady=12)
-        Label(footer, 'Scroll to zoom · drag to position · Alt to pick a color', 'small').pack(side='left')
-        self.apply_button = Btn(footer, 'Apply', command=self._on_apply)
+        Label(footer, 'Scroll to zoom · right-drag to pan · Alt to pick', 'small').pack(side='left')
+        self.apply_button = Btn(footer, 'Apply', variant='primary', command=self._on_apply)
         self.apply_button.pack(side='right', padx=(8, 0))
         self.cancel_button = Btn(footer, 'Cancel', command=self._on_cancel)
         self.cancel_button.pack(side='right')
@@ -112,6 +115,19 @@ class ModernPixelizationEditor(winchrome.StableTitlebar, PixelizationEditorDialo
     def _size_changed(self, value):
         self.tool_size_var.set(str(value))
         self._apply_tool_size()
+
+    def _apply_target_size(self):
+        target = int(self.target_size_entry.get())
+        if target == getattr(self, '_applied_target', None):
+            return
+        super()._apply_target_size()
+        self._applied_target = target
+
+    def _apply_magic_threshold(self, value):
+        self.magic_threshold.set(int(value))
+        self.canvas.set_magic_threshold(int(value))
+        if self.config_mgr:
+            self.config_mgr.set('pixelization_editor', 'magic_wand_threshold', value=int(value))
 
     def _set_tool(self, tool):
         super()._set_tool(tool)

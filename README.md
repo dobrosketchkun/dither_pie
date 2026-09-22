@@ -19,9 +19,12 @@ then save from Export. Pixelization sizes the **shorter edge**, with even output
 dimensions. The full production pixelization editor retains grid alignment,
 brush/wand/picker tools, transparency, undo/redo and apply/cancel.
 
-Palette selection and algorithm parameters update a background preview. The mode
-gallery uses the actual algorithms (its blue-noise thumbnail uses a smaller
-32×32 matrix). Video export uses the
+Click **Update preview** to apply dithering to the current source; subsequent
+palette and parameter changes update it in the background. Loading or pixelizing
+a source starts with an undithered result. View switching preserves zoom framing
+and pan; comparison can use the original or pixelized image as its baseline.
+The mode gallery loads bundled, pre-rendered examples from the actual algorithms
+(its blue-noise thumbnail uses a smaller 32×32 matrix). Video export uses the
 completed preview's palette and parameters, streams frames through the existing
 processor, preserves supported audio/subtitles, and supports cancellation.
 Export saves the most processed result, regardless of which comparison view is

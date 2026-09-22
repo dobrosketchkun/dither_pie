@@ -88,7 +88,9 @@ A powerful Python-based application for applying artistic dithering and pixeliza
 
 ### Required Packages
 ```bash
-pip install pillow numpy scikit-learn customtkinter opencv-python pywavelets torch torchvision scipy rich
+pip install -r requirements.txt
+# Optional neural pixelization:
+pip install -r requirements-neural.txt
 ```
 
 ### Neural Models (Optional)
@@ -479,7 +481,10 @@ dither_cli.py          → CLI interface with Rich terminal output
 dithering_lib.py       → 12 dithering algorithms with configurable parameters
 video_processor.py     → Multi-core video processing with FFmpeg
 config_manager.py      → Persistent configuration with JSON storage
-gui_components.py      → Reusable UI widgets (settings dialog, animated status bar, zoomable image)
+gui_components.py      → Compatibility exports for UI classes
+ui/                    → Image views, palette dialogs, pixel editor, settings, and status widgets
+processing_config.py   -> Processing job validation and mode detection
+pixelization.py        → Shared regular and neural pixelization
 utils.py               → Palette management (generation, import, extraction)
 models/                → Neural pixelization models (PyTorch)
 spinners.json          → Animated spinner definitions for status bar
@@ -520,4 +525,7 @@ Neural pixelization models from:
 - [arenasys/pixelization_inference](https://github.com/arenasys/pixelization_inference)
 - [WuZongWei6/Pixelization](https://github.com/WuZongWei6/Pixelization)
 
+## Development
 
+See [DEVELOPMENT.md](DEVELOPMENT.md) for module ownership, environment setup,
+regression tests, and the follow-up reliability work.

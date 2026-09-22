@@ -2,7 +2,10 @@
 
 import json
 import logging
+from multiprocessing import get_context
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -67,6 +70,18 @@ class ImageProcessingTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             self.assertFalse(_process_single_frame(Path(directory) / 'missing.png', ImageDitherer()))
 
+    def test_frame_worker_runs_in_spawned_process(self):
+        # Windows spawns fresh interpreters, so imports and pickling must work.
+        with tempfile.TemporaryDirectory() as directory:
+            frame = Path(directory) / 'frame.png'
+            Image.new('RGB', (4, 4), (255, 0, 0)).save(frame)
+            with get_context('spawn').Pool(1) as pool:
+                task = pool.apply_async(_process_single_frame,
+                                        (frame, ImageDitherer(palette=self.palette)))
+                self.assertTrue(task.get(timeout=60))
+            with Image.open(frame) as result:
+                self.assertEqual(result.getpixel((0, 0)), (255, 0, 0))
+
 
 class ConfigurationAndCLITests(unittest.TestCase):
     def setUp(self):
@@ -122,6 +137,21 @@ class ConfigurationAndCLITests(unittest.TestCase):
         config['output'] = str(self.root / 'result.jpg')
         self.assertFalse(cli.process_single_image(config))
         self.assertFalse(Path(config['output']).exists())
+
+
+class EntryPointTests(unittest.TestCase):
+    def run_cli(self, option):
+        root = Path(__file__).resolve().parents[1]
+        return subprocess.run([sys.executable, '-X', 'utf8', 'dither_pie.py', option], cwd=root,
+                              capture_output=True, text=True, encoding='utf-8',
+                              errors='replace', timeout=60, check=True)
+
+    def test_example_config_is_clean_json(self):
+        config = json.loads(self.run_cli('--example-config').stdout)
+        self.assertEqual(config['dithering']['mode'], 'bayer')
+
+    def test_help_loads_without_launching_gui(self):
+        self.assertIn('--example-config', self.run_cli('--help').stdout)
 
 
 if __name__ == '__main__':

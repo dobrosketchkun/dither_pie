@@ -1,0 +1,4 @@
+# Optional neural pixelization support; model weights are downloaded separately.
+-r requirements.txt
+torch
+torchvision

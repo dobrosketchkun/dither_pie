@@ -1,0 +1,10 @@
+# Core image processing, CLI, and GUI dependencies.
+Pillow
+numpy
+scipy
+scikit-learn
+PyWavelets
+requests
+rich
+customtkinter
+opencv-python

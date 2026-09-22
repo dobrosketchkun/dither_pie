@@ -1,105 +1,38 @@
-"""
-High-performance video processing module with multiprocessing support.
-Optimized to prevent freezing and handle large videos efficiently.
-"""
+"""Bounded video decoding, frame processing, encoding, and audio/subtitle muxing."""
 
-import os
+from contextlib import ExitStack
+from fractions import Fraction
 import json
 import math
-from fractions import Fraction
-import sys
-import subprocess
-import tempfile
-import shutil
-from pathlib import Path
-from typing import Optional, Callable, Tuple
 from multiprocessing import Pool, cpu_count
-from functools import partial
-import numpy as np
-from PIL import Image
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+from typing import Optional, Callable, Tuple
 
+from PIL import Image
 from dithering_lib import ImageDitherer, PixelizeMethod
-# Re-export these names for existing callers of video_processor.
+# Compatibility exports for existing callers.
 from pixelization import NeuralPixelizer, pixelize_regular
 
-__all__ = [
-    'VideoProcessor',
-    'NeuralPixelizer',
-    'pixelize_regular',
-]
+__all__ = ['VideoProcessor', 'NeuralPixelizer', 'pixelize_regular']
 
 
 class VideoProcessor:
-    """
-    Handles video processing with intelligent frame handling and parallel processing.
-    """
-    
-    def __init__(self, 
-                 num_workers: Optional[int] = None,
-                 progress_callback: Optional[Callable[[float, str], None]] = None):
-        """
-        Initialize video processor.
-        
-        Args:
-            num_workers: Number of parallel workers. Defaults to min(4, CPU count - 1) to prevent system freeze.
-            progress_callback: Function to call with (progress_fraction, status_message).
-        """
-        # Limit workers to prevent system freeze - use at most 4 workers
+    def __init__(self, num_workers=None, progress_callback=None):
         if num_workers is None:
             num_workers = min(4, max(1, cpu_count() - 1))
+        if isinstance(num_workers, bool) or not isinstance(num_workers, int) or num_workers < 1:
+            raise ValueError('num_workers must be a positive integer')
         self.num_workers = num_workers
         self.progress_callback = progress_callback
-        
-    def _report_progress(self, fraction: float, message: str):
-        """Report progress if callback is set."""
+
+    def _report_progress(self, fraction, message):
         if self.progress_callback:
             self.progress_callback(fraction, message)
-    
-    def _fix_failed_frames(self, failed_frames: list, all_frames: list):
-        """
-        Fix failed frames by copying from the nearest successfully processed frame.
-        This ensures video maintains full length without gaps.
-        
-        Args:
-            failed_frames: List of Path objects for frames that failed
-            all_frames: List of all frame Path objects in order
-        """
-        # Create set for fast lookup
-        failed_set = set(failed_frames)
-        
-        for failed_frame in failed_frames:
-            # Find the index of this frame
-            try:
-                idx = all_frames.index(failed_frame)
-            except ValueError:
-                print(f"Could not find index for {failed_frame.name}", file=sys.stderr)
-                continue
-            
-            # Try to find nearest successful frame
-            # First try previous frames (going backwards)
-            source_frame = None
-            for i in range(idx - 1, -1, -1):
-                if all_frames[i] not in failed_set and all_frames[i].exists():
-                    source_frame = all_frames[i]
-                    break
-            
-            # If no previous frame, try next frames (going forward)
-            if source_frame is None:
-                for i in range(idx + 1, len(all_frames)):
-                    if all_frames[i] not in failed_set and all_frames[i].exists():
-                        source_frame = all_frames[i]
-                        break
-            
-            # Copy the source frame
-            if source_frame:
-                try:
-                    shutil.copy2(source_frame, failed_frame)
-                    print(f"Fixed {failed_frame.name} by copying from {source_frame.name}", file=sys.stderr)
-                except Exception as e:
-                    print(f"Failed to copy frame {source_frame.name} to {failed_frame.name}: {e}", file=sys.stderr)
-            else:
-                print(f"ERROR: Could not find any successful frame to copy for {failed_frame.name}", file=sys.stderr)
-            
+
     def get_video_info(self, video_path: str) -> dict:
         """Read named ffprobe fields; never invent dimensions or a frame rate."""
         command = [
@@ -115,225 +48,252 @@ class VideoProcessor:
             raise ValueError(f"Cannot probe video: {error.stderr.strip()}") from error
         return _parse_video_info(json.loads(result.stdout))
 
-    def process_video_streaming(self,
-                                input_path: str,
-                                output_path: str,
-                                ditherer: ImageDitherer,
-                                pixelize_func: Optional[Callable[[Image.Image], Image.Image]] = None,
+    def process_video_streaming(self, input_path: str, output_path: str,
+                                ditherer: Optional[ImageDitherer],
+                                pixelize_func: Optional[Tuple[str, int]] = None,
                                 batch_size: int = 15,
                                 final_resize_multiplier: Optional[int] = None) -> bool:
-        """
-        Process video using streaming approach with batched multiprocessing.
-        Much faster than frame-by-frame extraction.
-        
-        Args:
-            input_path: Input video path
-            output_path: Output video path
-            ditherer: ImageDitherer instance
-            pixelize_func: Optional function to pixelize frames before dithering
-            batch_size: Number of frames to process in each batch (reduced to 15 to prevent freeze)
-            final_resize_multiplier: Optional integer multiplier for final upscale using nearest-neighbor
-            
-        Returns:
-            True if successful, False otherwise
+        """Stream RGB frames in bounded batches through one persistent pool.
+
+        pixelize_func is the legacy (method, max_size) tuple. Neural inference
+        stays in the calling process to reuse its model. Variable-rate input is
+        resampled to the probed average frame rate; rational rates stay exact.
+        Only compressed video and mux output are staged on disk. The destination
+        is replaced after success, so errors/cancellation preserve existing files.
         """
         try:
-            video_info = self.get_video_info(input_path)
-            fps = video_info['fps']
-            total_frames = video_info.get('frame_count', 0)
-            
-            self._report_progress(0.0, "Initializing video processing...")
-            
-            with tempfile.TemporaryDirectory() as tmp_dir:
-                tmp_dir_path = Path(tmp_dir)
-                
-                # Extract frames in batches using ffmpeg
-                self._report_progress(0.05, "Extracting frames...")
-                frame_pattern = str(tmp_dir_path / "frame_%05d.png")
-                
-                extract_cmd = [
-                    "ffmpeg", "-i", input_path,
-                    "-qscale:v", "2",  # High quality
-                    frame_pattern
+            if isinstance(batch_size, bool) or not isinstance(batch_size, int) or batch_size < 1:
+                raise ValueError('batch_size must be a positive integer')
+            if final_resize_multiplier is not None and (
+                isinstance(final_resize_multiplier, bool) or
+                not isinstance(final_resize_multiplier, int) or final_resize_multiplier < 1
+            ):
+                raise ValueError('final_resize_multiplier must be a positive integer')
+            source, destination = Path(input_path).resolve(), Path(output_path).resolve()
+            if source == destination:
+                raise ValueError('Input and output video paths must differ')
+            info = self.get_video_info(str(source))
+            size = (info['width'], info['height'])
+            rate = info['fps_fraction']
+            method, max_size = pixelize_func if pixelize_func is not None else (None, 64)
+            if method not in (None, PixelizeMethod.NONE.value, PixelizeMethod.REGULAR.value,
+                              PixelizeMethod.NEURAL.value):
+                raise ValueError(f'Unknown pixelization method: {method}')
+            neural = NeuralPixelizer() if method == PixelizeMethod.NEURAL.value else None
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            self._report_progress(0.0, 'Starting streaming video processing...')
+
+            with tempfile.TemporaryDirectory(prefix='dither_', dir=destination.parent) as directory:
+                stage = Path(directory)
+                encoded = stage / 'video.mp4'
+                muxed = stage / ('result' + (destination.suffix or '.mp4'))
+                with ExitStack() as resources:
+                    decode_errors = resources.enter_context(tempfile.TemporaryFile())
+                    decode_command = [
+                        'ffmpeg', '-nostdin', '-v', 'error', '-i', str(source),
+                        '-map', '0:v:0', '-an', '-sn', '-dn',
+                        '-vf', f'fps={rate}', '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1',
+                    ]
+                    decoder = subprocess.Popen(decode_command, stdin=subprocess.DEVNULL,
+                                               stdout=subprocess.PIPE, stderr=decode_errors,
+                                               **_process_options())
+                    resources.callback(_stop_process, decoder)
+                    frame_bytes = size[0] * size[1] * 3
+                    first_data = _read_frame(decoder.stdout, frame_bytes)
+                    if first_data is None:
+                        _check_process(decoder, decode_errors, 'Decoding')
+                        raise ValueError('No frames decoded from video')
+                    first_image = Image.frombytes('RGB', size, first_data)
+                    first = _process_frame_image(first_image, ditherer, method, max_size,
+                                                 final_resize_multiplier, neural)
+                    output_size = first.size
+                    # Processing the first frame also initializes any automatic
+                    # palette before the ditherer is sent to worker processes.
+                    encode_errors = resources.enter_context(tempfile.TemporaryFile())
+                    encode_command = [
+                        'ffmpeg', '-nostdin', '-v', 'error', '-y',
+                        '-f', 'rawvideo', '-pix_fmt', 'rgb24',
+                        '-s:v', f'{output_size[0]}x{output_size[1]}', '-framerate', rate,
+                        '-i', 'pipe:0', '-an', '-c:v', 'libx264', '-preset', 'medium',
+                        '-crf', '18', '-pix_fmt', 'yuv420p', str(encoded),
+                    ]
+                    encoder = subprocess.Popen(encode_command, stdin=subprocess.PIPE,
+                                               stdout=subprocess.DEVNULL, stderr=encode_errors,
+                                               **_process_options())
+                    resources.callback(_stop_process, encoder)
+                    # Cap queued pixel payloads as well as the number of frames.
+                    # Algorithm workspaces and worker interpreter memory are additional.
+                    payload_per_frame = frame_bytes + output_size[0] * output_size[1] * 3
+                    limit = min(batch_size, max(1, (64 * 1024 * 1024) // payload_per_frame))
+                    pool = None
+                    if neural is None and self.num_workers > 1:
+                        pool = resources.enter_context(Pool(
+                            processes=self.num_workers, initializer=_init_frame_worker,
+                            initargs=(size, output_size, ditherer, method, max_size, final_resize_multiplier),
+                        ))
+                    processed = 1
+                    try:
+                        encoder.stdin.write(first.tobytes())
+                        del first, first_image, first_data
+                        for batch in _frame_batches(decoder.stdout, frame_bytes, limit):
+                            if pool is not None:
+                                results = pool.map(_process_stream_frame, batch)
+                            else:
+                                results = []
+                                for data in batch:
+                                    frame = Image.frombytes('RGB', size, data)
+                                    result = _process_frame_image(frame, ditherer, method, max_size,
+                                                                  final_resize_multiplier, neural)
+                                    if result.size != output_size:
+                                        raise ValueError('Processed frame dimensions changed')
+                                    results.append(result.tobytes())
+                            for data in results:
+                                encoder.stdin.write(data)
+                            processed += len(batch)
+                            total = info['frame_count']
+                            fraction = min(0.89, 0.1 + 0.79 * processed / total) if total else 0.1
+                            self._report_progress(fraction, f'Processed {processed} frames')
+                            del results, batch
+                        if pool is not None:
+                            # Fork-based workers can inherit pipe descriptors.
+                            # Reap them before signaling EOF to the encoder.
+                            pool.close()
+                            pool.join()
+                        _check_process(decoder, decode_errors, 'Decoding')
+                        encoder.stdin.close()
+                        encoder.stdin = None
+                        _check_process(encoder, encode_errors, 'Encoding')
+                    except BrokenPipeError as error:
+                        raise RuntimeError('Encoding failed: ' + _read_error_log(encode_errors)) from error
+
+                self._report_progress(0.9, 'Copying audio and subtitles...')
+                # EOF fixes the exact video frame count. Limit copied tracks to
+                # that duration, without extending video to match longer audio.
+                duration = float(Fraction(processed, 1) / Fraction(rate))
+                mux_command = [
+                    'ffmpeg', '-nostdin', '-v', 'error', '-y', '-i', str(encoded),
+                    '-i', str(source), '-map', '0:v:0', '-map', '1:a?', '-map', '1:s?',
+                    '-map_metadata', '1', '-c', 'copy', '-t', f'{duration:.9f}',
+                    '-metadata:s:v:0', 'rotate=0', str(muxed),
                 ]
-                
-                subprocess.run(extract_cmd, 
-                             stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL,
-                             check=True)
-                
-                # Get list of extracted frames
-                frame_files = sorted(tmp_dir_path.glob("frame_*.png"))
-                total_frames = len(frame_files)
-                
-                if total_frames == 0:
-                    raise ValueError("No frames extracted from video")
-                
-                self._report_progress(0.1, f"Processing {total_frames} frames...")
-                
-                # Unpack pixelize_func (now a tuple like ("neural", 64) or None)
-                pixelize_method = None
-                max_size = 64
-                if pixelize_func is not None:
-                    pixelize_method, max_size = pixelize_func
-                
-                # Determine processing strategy based on pixelization method
-                # Neural pixelization: process in main thread to reuse loaded model
-                # Regular pixelization: use multiprocessing for speed
-                
-                processed_count = 0
-                
-                if pixelize_method == PixelizeMethod.NEURAL.value or pixelize_method == "neural":
-                    # Process sequentially in main thread to avoid reloading model
-                    self._report_progress(0.1, f"Processing {total_frames} frames (neural mode: slower but higher quality)...")
-                    
-                    # Load model once in main process
-                    pixelizer = NeuralPixelizer()
-                    
-                    # Import for memory management
-                    import gc
-                    import torch
-                    
-                    failed_frames = []
-                    for frame_file in frame_files:
-                        success = False
-                        last_error = None
-                        
-                        # Try up to 3 times
-                        for attempt in range(3):
-                            try:
-                                img = Image.open(frame_file).convert('RGB')
-                                # Pixelize using shared model instance
-                                img = pixelizer.pixelize(img, max_size)
-                                # Apply dithering
-                                dithered = ditherer.apply_dithering(img)
-                                # Apply final resize if specified
-                                if final_resize_multiplier:
-                                    dithered = _apply_final_resize_to_frame(dithered, final_resize_multiplier)
-                                # Save back
-                                dithered.save(frame_file)
-                                
-                                # Verify the frame was saved correctly
-                                if not frame_file.exists() or frame_file.stat().st_size == 0:
-                                    raise ValueError(f"Frame {frame_file} not saved properly")
-                                
-                                success = True
-                                break
-                            except Exception as e:
-                                last_error = e
-                                if attempt < 2:  # Don't print on last attempt
-                                    print(f"Retry {attempt+1}/3 for frame {frame_file.name}: {e}", file=sys.stderr)
-                        
-                        if not success:
-                            print(f"Error processing frame {frame_file} after 3 attempts: {last_error}", file=sys.stderr)
-                            failed_frames.append(frame_file)
-                        
-                        processed_count += 1
-                        
-                        # CRITICAL: Clear memory every frame to prevent accumulation
-                        # Neural processing can accumulate GB of memory without this
-                        if processed_count % 5 == 0:
-                            # Aggressive garbage collection every 5 frames
-                            gc.collect()
-                            if torch.cuda.is_available():
-                                torch.cuda.empty_cache()
-                        
-                        if processed_count % 5 == 0:  # Report every 5 frames
-                            progress = 0.1 + 0.8 * (processed_count / total_frames)
-                            self._report_progress(progress, 
-                                                f"Processed {processed_count}/{total_frames} frames")
-                    
-                    # Handle failed frames by copying from nearest successful frame
-                    if failed_frames:
-                        print(f"Fixing {len(failed_frames)} failed frames by copying from nearest frames...", file=sys.stderr)
-                        self._fix_failed_frames(failed_frames, frame_files)
-                else:
-                    # Use multiprocessing for regular pixelization
-                    failed_frames = []
-                    for batch_start in range(0, total_frames, batch_size):
-                        batch_end = min(batch_start + batch_size, total_frames)
-                        batch_files = frame_files[batch_start:batch_end]
-                        
-                        # Create processing function for this batch
-                        process_func = partial(
-                            _process_single_frame,
-                            ditherer=ditherer,
-                            pixelize_method=pixelize_method,
-                            max_size=max_size,
-                            final_resize_multiplier=final_resize_multiplier
-                        )
-                        
-                        # Process batch in parallel
-                        with Pool(processes=self.num_workers) as pool:
-                            results = pool.map(process_func, batch_files)
-                        
-                        # Check for failures and retry them sequentially
-                        for i, success in enumerate(results):
-                            if not success:
-                                frame_path = batch_files[i]
-                                print(f"Retrying failed frame {frame_path.name}...", file=sys.stderr)
-                                # Retry up to 2 more times
-                                retry_success = False
-                                for retry in range(2):
-                                    if _process_single_frame(frame_path, ditherer, pixelize_method, max_size, final_resize_multiplier):
-                                        retry_success = True
-                                        break
-                                if not retry_success:
-                                    failed_frames.append(frame_path)
-                        
-                        processed_count += len(batch_files)
-                        progress = 0.1 + 0.8 * (processed_count / total_frames)
-                        self._report_progress(progress, 
-                                            f"Processed {processed_count}/{total_frames} frames")
-                    
-                    # Handle failed frames by copying from nearest successful frame
-                    if failed_frames:
-                        print(f"Fixing {len(failed_frames)} failed frames by copying from nearest frames...", file=sys.stderr)
-                        self._fix_failed_frames(failed_frames, frame_files)
-                
-                # Re-encode video
-                self._report_progress(0.9, "Encoding final video...")
-                
-                # Verify all frames exist - they should now after fix_failed_frames
-                existing_frames = sorted(tmp_dir_path.glob("frame_*.png"))
-                if len(existing_frames) != total_frames:
-                    print(f"WARNING: Expected {total_frames} frames but found {len(existing_frames)}", 
-                          file=sys.stderr)
-                
-                print(f"Encoding {total_frames} frames at {fps:.3f} fps", file=sys.stderr)
-                
-                # CRITICAL FIX: Use -vframes to specify exact number of frames
-                # This prevents ffmpeg from duplicating the last frame to match audio duration
-                encode_cmd = [
-                    "ffmpeg", "-y",
-                    "-framerate", f"{fps:.5f}",
-                    "-i", frame_pattern,
-                    "-i", input_path,
-                    "-map", "0:v:0",  # Take video from first input (our frames)
-                    "-map", "1:a?",   # Take audio from second input (original video) if it exists
-                    "-map", "1:s?",   # Take subtitles from second input if they exist
-                    "-c:v", "libx264",
-                    "-preset", "medium",
-                    "-crf", "18",
-                    "-pix_fmt", "yuv420p",
-                    "-vframes", str(total_frames),  # Output option: encode exactly this many frames
-                    "-c:a", "copy",
-                    "-c:s", "copy",
-                    output_path
-                ]
-                
-                subprocess.run(encode_cmd,
-                             stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL,
-                             check=True)
-                
-                self._report_progress(1.0, "Video processing complete!")
-                return True
-                
-        except Exception as e:
-            self._report_progress(1.0, f"Error: {str(e)}")
-            print(f"Video processing error: {e}", file=sys.stderr)
+                result = subprocess.run(mux_command, capture_output=True, **_process_options())
+                if result.returncode:
+                    raise RuntimeError('Muxing failed: ' + result.stderr.decode('utf-8', errors='replace')[-8000:])
+                if not muxed.exists() or muxed.stat().st_size == 0:
+                    raise RuntimeError('FFmpeg produced an empty output')
+                os.replace(muxed, destination)
+            self._report_progress(1.0, 'Video processing complete!')
+            return True
+        except Exception as error:
+            self._report_progress(1.0, f'Error: {error}')
+            print(f'Video processing error: {error}', file=sys.stderr)
             return False
+
+
+def _process_options():
+    return {'creationflags': subprocess.CREATE_NO_WINDOW} if os.name == 'nt' else {}
+
+
+def _stop_process(process):
+    """Reap child processes on success, exceptions, and KeyboardInterrupt."""
+    if process.poll() is None:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+    for stream in (process.stdin, process.stdout):
+        if stream is not None:
+            try:
+                stream.close()
+            except OSError:
+                pass
+
+
+def _read_error_log(stream):
+    stream.seek(0, os.SEEK_END)
+    stream.seek(max(0, stream.tell() - 8000))
+    return stream.read().decode('utf-8', errors='replace').strip()
+
+
+def _check_process(process, errors, label):
+    if process.wait(timeout=60):
+        raise RuntimeError(f'{label} failed: {_read_error_log(errors)}')
+
+
+def _read_frame(stream, byte_count):
+    """Read a whole raw frame even if the pipe returns short reads."""
+    chunks = []
+    remaining = byte_count
+    while remaining:
+        chunk = stream.read(remaining)
+        if not chunk:
+            if remaining == byte_count:
+                return None
+            raise ValueError('Truncated raw video frame')
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b''.join(chunks)
+
+
+def _frame_batches(stream, frame_bytes, batch_size):
+    while True:
+        batch = []
+        for _ in range(batch_size):
+            frame = _read_frame(stream, frame_bytes)
+            if frame is None:
+                break
+            batch.append(frame)
+        if not batch:
+            return
+        yield batch
+
+
+def _process_frame_image(image, ditherer, method=None, max_size=64, multiplier=None, neural=None):
+    if method == PixelizeMethod.NEURAL.value:
+        image = (neural or NeuralPixelizer()).pixelize(image, max_size)
+    elif method == PixelizeMethod.REGULAR.value:
+        image = pixelize_regular(image, max_size)
+    if ditherer is not None:
+        image = ditherer.apply_dithering(image)
+    # The encoder always requires even dimensions, including when resizing and
+    # pixelization are both disabled.
+    if multiplier or image.width % 2 or image.height % 2:
+        image = _apply_final_resize_to_frame(image, multiplier or 1)
+    return image.convert('RGB')
+
+
+_FRAME_SETTINGS = None
+
+
+def _init_frame_worker(size, output_size, ditherer, method, max_size, multiplier):
+    global _FRAME_SETTINGS
+    _FRAME_SETTINGS = (size, output_size, ditherer, method, max_size, multiplier)
+
+
+def _process_stream_frame(data):
+    size, output_size, ditherer, method, max_size, multiplier = _FRAME_SETTINGS
+    image = Image.frombytes('RGB', size, data)
+    result = _process_frame_image(image, ditherer, method, max_size, multiplier)
+    if result.size != output_size:
+        raise ValueError('Processed frame dimensions changed')
+    return result.tobytes()
+
+
+def _process_single_frame(frame_path: Path, ditherer: ImageDitherer,
+                          pixelize_method: Optional[str] = None, max_size: int = 64,
+                          final_resize_multiplier: Optional[int] = None) -> bool:
+    """Compatibility worker for callers that already have a frame on disk."""
+    try:
+        with Image.open(frame_path) as source:
+            image = source.convert('RGB')
+        result = _process_frame_image(image, ditherer, pixelize_method, max_size, final_resize_multiplier)
+        result.save(frame_path)
+        return frame_path.exists() and frame_path.stat().st_size > 0
+    except Exception as error:
+        print(f'Error processing frame {frame_path}: {error}', file=sys.stderr)
+        return False
 
 
 def _apply_final_resize_to_frame(image: Image.Image, multiplier: int) -> Image.Image:
@@ -364,61 +324,6 @@ def _apply_final_resize_to_frame(image: Image.Image, multiplier: int) -> Image.I
     # Use NEAREST to preserve pixelated look
     resized = image.resize((new_w, new_h), Image.Resampling.NEAREST)
     return resized
-
-
-def _process_single_frame(frame_path: Path,
-                          ditherer: ImageDitherer,
-                          pixelize_method: Optional[str] = None,
-                          max_size: int = 64,
-                          final_resize_multiplier: Optional[int] = None) -> bool:
-    """
-    Process a single frame. Used by multiprocessing pool.
-    Must be a top-level function for pickling.
-    
-    Args:
-        frame_path: Path to the frame image
-        ditherer: ImageDitherer instance for dithering
-        pixelize_method: PixelizeMethod value or string ("neural", "regular", None)
-        max_size: Maximum size for pixelization
-        final_resize_multiplier: Optional integer multiplier for final upscale
-    
-    Returns:
-        True if successful, False if failed
-    """
-    try:
-        img = Image.open(frame_path).convert('RGB')
-        
-        # Pixelize if method provided (support both enum values and strings)
-        is_neural = pixelize_method == PixelizeMethod.NEURAL.value or pixelize_method == "neural"
-        is_regular = pixelize_method == PixelizeMethod.REGULAR.value or pixelize_method == "regular"
-        
-        if is_neural:
-            # Use neural pixelization
-            pixelizer = NeuralPixelizer()
-            img = pixelizer.pixelize(img, max_size)
-        elif is_regular:
-            # Use regular pixelization
-            img = pixelize_regular(img, max_size)
-        
-        # Apply dithering
-        dithered = ditherer.apply_dithering(img)
-        
-        # Apply final resize if specified
-        if final_resize_multiplier:
-            dithered = _apply_final_resize_to_frame(dithered, final_resize_multiplier)
-        
-        # Save back to same path
-        dithered.save(frame_path)
-        
-        # Verify the frame was saved correctly
-        if not frame_path.exists() or frame_path.stat().st_size == 0:
-            raise ValueError(f"Frame {frame_path} not saved properly")
-        
-        return True
-        
-    except Exception as e:
-        print(f"Error processing frame {frame_path}: {e}", file=sys.stderr)
-        return False
 
 
 def _parse_video_info(metadata: dict) -> dict:

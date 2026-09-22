@@ -16,8 +16,8 @@ from .processing import DitherRequest, GENERATED, read_image, read_video_frame
 class Operations:
     def _poll_work(self):
         if self._shutdown_requested:
+            self._shutdown_requested = False
             self._on_closing()
-            return
         if self._closing:
             return
         self._image_jobs.poll()
@@ -26,14 +26,14 @@ class Operations:
         try:
             while True:
                 fraction, text = self._progress.get_nowait()
-                self.status_bar.show_progress(fraction)
-                self.set_status(text, 'busy')
+                if self._video_busy:
+                    self.status_bar.show_progress(fraction)
+                    self.set_status(text, 'busy')
         except Empty:
             pass
         self.after(30, self._poll_work)
 
     def _error(self, error):
-        self._image_busy = False
         self._refresh_capabilities()
         self.set_status(str(error), 'err')
         messagebox.showerror('Processing failed', str(error), parent=self)
@@ -101,7 +101,10 @@ class Operations:
             self._image_busy = False
             on_result(value)
             self._refresh_capabilities()
-        self._image_jobs.submit(compute, done, self._error)
+        def failed(error):
+            self._image_busy = False
+            self._error(error)
+        self._image_jobs.submit(compute, done, failed)
 
     def load_image(self, path=None):
         if path is None:
@@ -126,6 +129,7 @@ class Operations:
             lambda result: self._source_loaded(result[0], path, result[1]), 'Loading video frame…')
 
     def _source_loaded(self, image, path, video_info=None):
+        self._cancel_preview()
         self.current_image = image
         self.is_video = video_info is not None
         self.video_path = str(path) if self.is_video else None
@@ -142,7 +146,7 @@ class Operations:
         self.config.add_recent_file(str(path))
         self.file_label.configure(text=Path(path).name)
         self.source_label.configure(text=f'{image.width} × {image.height}' +
-            (f"  ·  {float(video_info['fps_fraction']):.3f} fps" if self.is_video else
+            (f"  ·  {video_info['fps']:.3f} fps" if self.is_video else
              ('  ·  transparency' if self.source_has_alpha else '  ·  RGB')))
         self.show_view('Original', fit=True)
         self._update_resize_preview()
@@ -263,7 +267,8 @@ class Operations:
                             'idle' if ok else 'warn')
         def failed(error):
             done(False)
-            self._error(error)
+            if not self._cancel_video.is_set():
+                self._error(error)
         self._video_jobs.submit(compute, done, failed)
 
     def _refresh_capabilities(self):

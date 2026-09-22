@@ -1,9 +1,8 @@
 """Snapshot-based operations for the production interface. No Tk calls here."""
 from dataclasses import dataclass
-from pathlib import Path
+from fractions import Fraction
 import subprocess
 
-import numpy as np
 from PIL import Image
 
 from dithering_lib import ColorReducer, DitherMode, ImageDitherer
@@ -49,7 +48,7 @@ def read_image(path):
 
 
 def read_video_frame(path, info, index=0):
-    rate = float(info['fps_fraction'])
+    rate = float(Fraction(info['fps_fraction']))
     command = ['ffmpeg', '-v', 'error', '-ss', str(index / rate), '-i', str(path),
                '-frames:v', '1', '-f', 'image2pipe', '-vcodec', 'png', '-']
     result = subprocess.run(command, capture_output=True, check=True)

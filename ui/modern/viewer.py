@@ -254,10 +254,10 @@ class ImageCanvas(tk.Canvas):
                      fill="", outline=col, width=2, dash=(6, 6))
         self.create_text(cx, cy - 18, text=T.ICON["image"],
                          fill=col, font=("Segoe Fluent Icons", 30))
-        self.create_text(cx, cy + 22, text="Drop an image or video here",
+        self.create_text(cx, cy + 22, text="Open an image or video",
                          fill=T.res(T.c("dim")),
                          font=(T.FONTS["_raw_ui"], 12, "bold"))
-        self.create_text(cx, cy + 44, text="or press  Ctrl+O",
+        self.create_text(cx, cy + 44, text="Use the Source panel or press Ctrl+O",
                          fill=col, font=(T.FONTS["_raw_ui"], 10))
 
     # -- interaction -----------------------------------------------------

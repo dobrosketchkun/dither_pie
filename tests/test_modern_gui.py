@@ -2,6 +2,8 @@
 from pathlib import Path
 import tempfile
 import time
+import shutil
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -10,9 +12,11 @@ from PIL import Image
 from config_manager import ConfigManager
 from dithering_lib import DitherMode
 from ui.modern.app import ModernApp, Preferences
+from ui.modern.dialogs import ModeGallery, CommandPalette
 from ui.modern.processing import DitherRequest
 from ui.pixelization_editor import PixelizationEditorDialog
 from utils import PaletteManager
+from video_processor import VideoProcessor
 
 
 class ModernGUITests(unittest.TestCase):
@@ -97,6 +101,23 @@ class ModernGUITests(unittest.TestCase):
         field._nudge(1)
         self.assertEqual(field.get(), 33)
 
+    def test_gallery_and_command_palette_use_real_actions(self):
+        gallery = ModeGallery(self.app)
+        deadline = time.monotonic() + 30
+        while gallery._jobs._running:
+            self.assertLess(time.monotonic(), deadline)
+            self.pump()
+        self.assertEqual(len(gallery._images), len(list(DitherMode)))
+        gallery._choose(DitherMode.NONE.value)
+        self.assertEqual(self.app.dither_mode.get(), DitherMode.NONE.value)
+        commands = CommandPalette(self.app)
+        commands.entry.insert(0, 'fit image')
+        commands._filter()
+        self.assertEqual(len(commands.filtered), 1)
+        commands._first()
+        self.pump()
+        self.assertIsNone(self.app.grab_current())
+
     def test_production_editor_apply_preserves_transparency(self):
         self.load()
         app = self.app
@@ -115,6 +136,37 @@ class ModernGUITests(unittest.TestCase):
         self.assertEqual(app.pixelized_image.mode, 'RGBA')
         self.assertEqual(app.pixelized_image.getpixel((1, 0))[3], 0)
         self.assertEqual(app.pixelization_cache['method'], 'editor')
+
+    def test_editor_conversion_runs_off_ui_and_closes_safely(self):
+        from threading import get_ident
+        from ui.pixelization_editor import sample_editor_grid
+        source = self.load()
+        dialog = PixelizationEditorDialog(self.app, source, config=self.config, alpha_cutoff=128)
+        self.pump(.2)
+        owner = get_ident()
+        calls = []
+        original_transform = dialog.canvas._get_image_transform
+        def read_transform():
+            self.assertEqual(get_ident(), owner)
+            return original_transform()
+        def sample(*args):
+            calls.append(get_ident())
+            time.sleep(.1)
+            return sample_editor_grid(*args)
+        with patch.object(dialog.canvas, '_get_image_transform', read_transform), \
+             patch('ui.pixelization_editor.sample_editor_grid', sample):
+            dialog._start_conversion()
+            until = time.monotonic() + 5
+            while dialog._conversion_jobs._running:
+                self.assertLess(time.monotonic(), until)
+                self.pump()
+        self.assertTrue(calls)
+        self.assertNotEqual(calls[0], owner)
+        self.assertTrue(dialog.canvas.get_pixel_data())
+        dialog._start_conversion()
+        dialog._on_cancel()
+        self.pump(.2)
+        self.assertIsNone(self.app.grab_current())
 
     def test_preferences_modal_and_persistence(self):
         app = self.app
@@ -135,6 +187,56 @@ class ModernGUITests(unittest.TestCase):
         loaded = ConfigManager(str(self.root / 'config.json'))
         self.assertEqual(loaded.get('theme', 'appearance_mode'), 'dark')
         self.assertEqual(loaded.get('modern_gui', 'design_system'), 'Swiss Grid')
+
+    @unittest.skipUnless(shutil.which('ffmpeg') and shutil.which('ffprobe'), 'FFmpeg required')
+    def test_real_video_load_preview_and_export(self):
+        source = self.root / 'source.mp4'
+        output = self.root / 'result.mp4'
+        subprocess.run(['ffmpeg', '-nostdin', '-v', 'error', '-y', '-f', 'lavfi',
+            '-i', 'testsrc2=size=32x24:rate=24000/1001:duration=0.25',
+            '-c:v', 'libx264', '-pix_fmt', 'yuv420p', str(source)],
+            capture_output=True, check=True, timeout=30)
+        app = self.app
+        app.load_video(str(source))
+        self.finish()
+        self.assertTrue(app.is_video)
+        self.assertEqual(app.btn_pixelize_editor.cget('state'), 'disabled')
+        self.assertEqual(app.current_image.size, (32, 24))
+        app.palette_var.set('Test')
+        app._on_apply_dithering()
+        self.finish()
+        app.final_resize_var.set(True)
+        app.workers.var.set(1)
+        app.workers._sync_entry()
+        with patch('ui.modern.operations.filedialog.asksaveasfilename', return_value=str(output)):
+            app._apply_to_video_workflow()
+        self.finish()
+        self.assertTrue(output.exists())
+        info = VideoProcessor().get_video_info(str(output))
+        self.assertEqual((info['width'], info['height']), (64, 48))
+        self.assertEqual(info['fps_fraction'], '24000/1001')
+        self.assertFalse(app.status_bar._progress_shown)
+
+    def test_late_preview_cannot_replace_new_source(self):
+        from threading import Event
+        started, release = Event(), Event()
+        self.addCleanup(release.set)
+        self.load()
+        app = self.app
+        app.palette_var.set('Test')
+        original = DitherRequest.render
+        def slow(request, source):
+            started.set()
+            release.wait(5)
+            return original(request, source)
+        with patch.object(DitherRequest, 'render', slow):
+            app._on_apply_dithering()
+            self.assertTrue(started.wait(5))
+            app._source_loaded(Image.new('RGB', (10, 10)), self.root / 'new.png')
+            release.set()
+            self.finish()
+        self.assertIsNone(app.dithered_image)
+        self.assertEqual(app.current_image.size, (10, 10))
 
 
 if __name__ == '__main__':

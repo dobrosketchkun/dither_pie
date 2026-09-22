@@ -8,6 +8,13 @@ import dither_pie
 
 
 class LaunchTests(unittest.TestCase):
+    def test_default_is_modern(self):
+        launch = Mock()
+        with patch.object(sys, 'argv', ['dither_pie.py']), \
+             patch.dict(sys.modules, {'ui.modern.app': types.SimpleNamespace(launch_gui=launch)}):
+            dither_pie.main()
+        launch.assert_called_once_with()
+
     def test_explicit_design_routes(self):
         for flag, module in [('--old-design', 'dither_pie_gui'), ('--old_design', 'dither_pie_gui'),
                              ('--new-design', 'ui.modern.app'), ('--new_design', 'ui.modern.app')]:

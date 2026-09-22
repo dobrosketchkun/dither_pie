@@ -3,8 +3,9 @@
 Dither Pie - Entry Point
 
 Routes to GUI or CLI mode based on command-line arguments:
-- No arguments: Launch GUI
-- Arguments present: Launch CLI
+- No arguments: Launch the modern GUI
+- --old-design / --old_design: Launch the original GUI
+- Other arguments: Launch CLI
 """
 
 import sys
@@ -25,8 +26,8 @@ def main():
             from dither_pie_gui import launch_gui
         launch_gui()
     elif len(sys.argv) == 1:
-        # No arguments - launch GUI
-        from dither_pie_gui import launch_gui
+        # No arguments - launch the production panel interface.
+        from ui.modern.app import launch_gui
         launch_gui()
     else:
         # Arguments present - launch CLI

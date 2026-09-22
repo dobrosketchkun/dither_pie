@@ -1,6 +1,46 @@
 # Dither Pie - Advanced Image & Video Dithering Tool
 
-A powerful Python-based application for applying artistic dithering and pixelization effects to images and videos. Features both intuitive GUI and powerful CLI modes with intelligent caching, live previews, and professional-quality retro visual effects.
+A Python application for dithering and pixelizing images and videos, with a desktop GUI and a CLI for batch processing.
+
+## Desktop interface
+
+```bash
+python dither_pie.py                 # New default interface
+python dither_pie.py --old-design    # Original interface (--old_design also works)
+```
+
+The default interface has Source, Pixelize, Palette, Dither and Export panels.
+New preferences start in **Light** mode; an existing saved appearance preference
+is respected. Preferences also select the design system and custom/native title
+bar. `_gui_preview` remains an independent mockup and is not needed to run the app.
+
+Load a real image or video, optionally pixelize it, choose a palette and algorithm,
+then save from Export. Pixelization sizes the **shorter edge**, with even output
+dimensions. The full production pixelization editor retains grid alignment,
+brush/wand/picker tools, transparency, undo/redo and apply/cancel.
+
+Palette selection and algorithm parameters update a background preview. The mode
+gallery uses the actual algorithms (its blue-noise thumbnail uses a smaller
+32×32 matrix). Video export uses the
+completed preview's palette and parameters, streams frames through the existing
+processor, preserves supported audio/subtitles, and supports cancellation.
+Export saves the most processed result, regardless of which comparison view is
+currently displayed. A stale dithered result must be refreshed before saving.
+
+Numeric entries accept manual values beyond convenient slider ranges where the
+operation supports them. Up/Down uses each field's step; Enter or focus loss
+commits edits. Thresholds and algorithm parameters retain their actual bounds.
+
+Shortcuts: **Ctrl+O** open, **Ctrl+S** save, **Ctrl+K** commands,
+**Ctrl+,** preferences, **Ctrl+Tab** next panel, **F** fit, **1** actual size,
+**C** comparison. Canvas letter shortcuts do not run while typing in an entry.
+Terminal Ctrl+C requests an orderly shutdown.
+
+CLI processing arguments are unchanged. Use GUI design flags alone. The explicit
+`--new-design` flag remains available for scripts. The screenshots below show the
+original interface, still accessible with `--old-design`.
+
+See [the migration inventory](docs/gui-migration.md) for the feature mapping.
 
 ---
 
@@ -83,7 +123,7 @@ A powerful Python-based application for applying artistic dithering and pixeliza
 ## 🚀 Installation
 
 ### Prerequisites
-- Python 3.7 or higher
+- Python 3.10 or higher
 - FFmpeg (in system PATH for video processing)
 
 ### Required Packages

@@ -39,3 +39,28 @@ from the library, not `demo.MODE_PARAMS`.
 5. Light first-run theme, persisted preferences, modal theme/reopen/close checks.
 6. Existing regression suite plus new GUI integration checks; switch default only
    once these pass. Keep the legacy launch path as a supported fallback.
+
+## Implementation
+
+`ui/modern` owns the promoted theme, widgets, viewport and window chrome. Its
+shell reuses the legacy controller's image save, palette-management and editor
+contracts, while `operations.py` handles snapshot-based background jobs and
+`processing.py` contains operations that have no Tk dependency. It does not
+import prototype files or mode definitions.
+
+The palette library is searchable, parameters come from `ImageDitherer`, and
+gallery examples run the real algorithms. Unsupported prototype codec, CRF,
+fake video timeline, clipboard and cache controls are omitted. Video workers,
+upscaling, cancellation and exports perform real work.
+
+The editor's canvas, sampling, editing history, shortcuts and RGBA result remain
+the production implementation. Conversion now captures Tk geometry on the UI
+thread and samples in a worker; closing the editor discards pending results.
+Alt-picker bindings belong to the dialog rather than remaining global after it
+closes. Grid resizing invalidates an older conversion.
+
+Integration coverage includes every mode's parameter UI, transparent image
+processing and saving, editor apply/cancel and worker lifecycle, modal theme
+changes, preferences, stale preview rejection, and actual fractional-rate video
+loading/export. Existing streaming tests cover audio/subtitles, rotation,
+failure cleanup, dimensions and frame counts.

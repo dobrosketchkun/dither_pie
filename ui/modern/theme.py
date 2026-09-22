@@ -1,4 +1,4 @@
-"""Design tokens for the Dither Pie GUI mockup.
+"""Design tokens for the Dither Pie production interface.
 
 Everything visual comes from here: colors, type scale, spacing and the icon
 glyph table.  Colors are (light, dark) pairs so CustomTkinter can swap them

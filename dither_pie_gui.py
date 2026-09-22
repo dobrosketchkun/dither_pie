@@ -797,10 +797,10 @@ class DitheringApp(ctk.CTk):
         
         try:
             max_size = int(self.max_size_entry.get())
-            if max_size <= 0:
+            if max_size < 2:
                 raise ValueError
         except:
-            messagebox.showerror("Invalid Input", "Please enter a valid positive integer for max size.")
+            messagebox.showerror("Invalid Input", "Please enter an integer of at least 2 for max size.")
             return
         
         # Check if we can reuse cached result
@@ -841,10 +841,10 @@ class DitheringApp(ctk.CTk):
         
         try:
             max_size = int(self.max_size_entry.get())
-            if max_size <= 0:
+            if max_size < 2:
                 raise ValueError
         except:
-            messagebox.showerror("Invalid Input", "Please enter a valid positive integer for max size.")
+            messagebox.showerror("Invalid Input", "Please enter an integer of at least 2 for max size.")
             return
         
         # Check if we can reuse cached result

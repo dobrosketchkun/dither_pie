@@ -91,3 +91,21 @@ class BatchTests(unittest.TestCase):
                                 cwd=Path(__file__).resolve().parents[1], capture_output=True, timeout=60)
         self.assertEqual(result.returncode, 1, result.stderr)
         self.assertTrue((self.root / 'out' / 'good.png').exists())
+
+    def test_video_with_dithering_disabled_does_not_generate_palette(self):
+        output = self.root / 'disabled.mp4'
+        self.config['output'] = str(output)
+        with patch.object(cli, 'VideoProcessor') as processor, \
+             patch.object(cli, 'setup_palette_from_config') as palette, \
+             patch.object(cli, 'CLIProgressCallback'):
+            processor.return_value.get_video_info.return_value = {
+                'width': 32, 'height': 24, 'fps': 12, 'frame_count': 12}
+
+            def process(input_path, output_path, ditherer, **kwargs):
+                self.assertIsNone(ditherer)
+                Path(output_path).write_bytes(b'encoded')
+                return True
+
+            processor.return_value.process_video_streaming.side_effect = process
+            self.assertTrue(cli.process_single_video(self.config))
+            palette.assert_not_called()

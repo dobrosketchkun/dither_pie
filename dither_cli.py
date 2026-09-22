@@ -417,20 +417,20 @@ def process_single_image(config: Dict[str, Any]) -> bool:
 def process_single_video(config: Dict[str, Any], neural_pixelizer: Optional[NeuralPixelizer] = None) -> bool:
     """
     Process a single video with pixelization and dithering.
-    
+
     Args:
         config: Validated configuration dictionary
         neural_pixelizer: Optional pre-loaded neural pixelizer (for batch processing)
-        
+
     Returns:
         True if successful, False otherwise
     """
     try:
         input_path = Path(config["input"])
         output_path = Path(config["output"])
-        
+
         logger.info(f"Processing video: [cyan]{input_path.name}[/]")
-        
+
         # Get video info
         video_processor = VideoProcessor()
         try:
@@ -439,50 +439,52 @@ def process_single_video(config: Dict[str, Any], neural_pixelizer: Optional[Neur
                        f"{video_info['fps']:.2f} fps, {video_info['frame_count']} frames")
         except Exception as e:
             logger.warning(f"Could not get video info: {e}")
-        
-        # Load first frame for palette generation
-        logger.info("Loading first frame for palette generation...")
-        import tempfile
-        import subprocess
-        
-        with tempfile.TemporaryDirectory() as tmpdir:
-            frame_path = os.path.join(tmpdir, "frame.png")
-            cmd = [
-                "ffmpeg", "-i", str(input_path),
-                "-vframes", "1",
-                frame_path,
-                "-y"
-            ]
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-            first_frame = Image.open(frame_path).convert('RGB')
-        
-        # Setup palette (returns palette and actual color count)
-        palette, actual_num_colors = setup_palette_from_config(config["palette"], first_frame)
-        
-        # Setup ditherer
-        dither_mode_str = config["dithering"]["mode"]
-        dither_params = config["dithering"].get("parameters", {})
-        
-        try:
-            dither_mode = DitherMode(dither_mode_str)
-        except ValueError:
-            logger.error(f"Invalid dither mode: {dither_mode_str}")
-            return False
-        
-        ditherer = ImageDitherer(
-            num_colors=actual_num_colors,
-            dither_mode=dither_mode,
-            palette=palette,
-            use_gamma=config["palette"]["use_gamma"],
-            dither_params=dither_params
-        )
-        
+
+        ditherer = None
+        if config['dithering']['enabled']:
+            # Load first frame for palette generation
+            logger.info("Loading first frame for palette generation...")
+            import tempfile
+            import subprocess
+
+            with tempfile.TemporaryDirectory() as tmpdir:
+                frame_path = os.path.join(tmpdir, "frame.png")
+                cmd = [
+                    "ffmpeg", "-i", str(input_path),
+                    "-vframes", "1",
+                    frame_path,
+                    "-y"
+                ]
+                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+                first_frame = Image.open(frame_path).convert('RGB')
+
+            # Setup palette (returns palette and actual color count)
+            palette, actual_num_colors = setup_palette_from_config(config["palette"], first_frame)
+
+            # Setup ditherer
+            dither_mode_str = config["dithering"]["mode"]
+            dither_params = config["dithering"].get("parameters", {})
+
+            try:
+                dither_mode = DitherMode(dither_mode_str)
+            except ValueError:
+                logger.error(f"Invalid dither mode: {dither_mode_str}")
+                return False
+
+            ditherer = ImageDitherer(
+                num_colors=actual_num_colors,
+                dither_mode=dither_mode,
+                palette=palette,
+                use_gamma=config["palette"]["use_gamma"],
+                dither_params=dither_params
+            )
+
         # Setup pixelization function
         pixelize_func = None
         if config["pixelization"]["enabled"]:
             method = config["pixelization"]["method"]
             max_size = config["pixelization"]["max_size"]
-            
+
             if method == PixelizeMethod.REGULAR.value:
                 pixelize_func = (PixelizeMethod.REGULAR.value, max_size)
             elif method == PixelizeMethod.NEURAL.value:
@@ -491,19 +493,19 @@ def process_single_video(config: Dict[str, Any], neural_pixelizer: Optional[Neur
                 if neural_pixelizer is None:
                     logger.info("Loading neural pixelization models...")
                     neural_pixelizer = NeuralPixelizer()
-        
+
         # Setup final resize
         final_resize_multiplier = None
         if config["final_resize"]["enabled"]:
             final_resize_multiplier = config["final_resize"]["multiplier"]
-        
+
         # Create output directory
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         # Progress callback
         progress_callback = CLIProgressCallback()
         video_processor = VideoProcessor(progress_callback=lambda f, m: progress_callback.update(f, m))
-        
+
         # Process video
         logger.info("Processing video frames...")
         with progress_callback:
@@ -514,7 +516,7 @@ def process_single_video(config: Dict[str, Any], neural_pixelizer: Optional[Neur
                 pixelize_func=pixelize_func,
                 final_resize_multiplier=final_resize_multiplier
             )
-        
+
         if success:
             # Get file size
             file_size = output_path.stat().st_size
@@ -524,11 +526,11 @@ def process_single_video(config: Dict[str, Any], neural_pixelizer: Optional[Neur
         else:
             logger.error("Video processing failed")
             return False
-    
+
     except KeyboardInterrupt:
         logger.warning("\n[yellow]Video processing interrupted by user[/]")
         raise  # Re-raise to stop execution
-            
+
     except Exception as e:
         logger.error(f"Failed to process video: {e}", exc_info=True)
         return False

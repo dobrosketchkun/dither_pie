@@ -5,6 +5,7 @@ It has no dependency on the CLI presentation or video execution layers.
 """
 
 import json
+from copy import deepcopy
 from pathlib import Path
 from typing import Any, Dict
 
@@ -25,156 +26,94 @@ class ConfigValidationError(Exception):
     pass
 
 
+def _normalize_integer(section, key, label, minimum, errors):
+    value = section[key]
+    try:
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            raise ValueError
+        normalized = int(value)
+        if normalized < minimum:
+            errors.append(f"'{label}' must be at least {minimum}")
+        else:
+            section[key] = normalized
+    except (ValueError, TypeError):
+        errors.append(f"'{label}' must be an integer")
+
+
 def validate_config(config: Dict[str, Any], config_path: Path, skip_input_check: bool = False) -> Dict[str, Any]:
-    """
-    Validate configuration and return normalized config.
-    
-    Args:
-        config: Raw config dictionary
-        config_path: Path to config file (for resolving relative paths)
-        skip_input_check: If True, skip checking if input file exists (for override mode)
-        
-    Returns:
-        Validated and normalized config
-        
-    Raises:
-        ConfigValidationError: If validation fails
-    """
+    """Return a normalized job without modifying the caller's configuration."""
+    if not isinstance(config, dict):
+        raise ConfigValidationError("Configuration must be an object/dictionary")
+    config = deepcopy(config)
     errors = []
-    
-    # Required fields (but allow dummy values if we're going to override)
-    if "input" not in config:
-        errors.append("Missing required field: 'input'")
-    
-    if "output" not in config:
-        errors.append("Missing required field: 'output'")
-    
-    # Validate mode (optional, can be auto-detected)
-    mode = config.get("mode")
-    if mode and mode not in VALID_MODES:
-        errors.append(f"Invalid mode: '{mode}'. Must be one of: {VALID_MODES}")
-    
-    # Validate pixelization section
-    if "pixelization" in config:
-        pix = config["pixelization"]
-        if not isinstance(pix, dict):
-            errors.append("'pixelization' must be an object/dictionary")
+    defaults = {
+        "pixelization": {"enabled": False, "method": PixelizeMethod.REGULAR.value, "max_size": 128},
+        "dithering": {"enabled": True, "mode": DitherMode.BAYER.value, "parameters": {}},
+        "palette": {"source": PaletteSource.MEDIAN_CUT.value, "num_colors": 16, "use_gamma": False},
+        "final_resize": {"enabled": False, "multiplier": 2},
+    }
+    for name, values in defaults.items():
+        if name not in config:
+            config[name] = deepcopy(values)
+        elif not isinstance(config[name], dict):
+            errors.append(f"'{name}' must be an object/dictionary")
         else:
-            if "method" in pix and pix["method"] not in VALID_PIXELIZATION_METHODS:
-                errors.append(f"Invalid pixelization method: '{pix['method']}'. Must be one of: {VALID_PIXELIZATION_METHODS}")
-            
-            if "max_size" in pix:
-                try:
-                    max_size = int(pix["max_size"])
-                    if max_size <= 0:
-                        errors.append("'pixelization.max_size' must be positive")
-                except (ValueError, TypeError):
-                    errors.append("'pixelization.max_size' must be an integer")
-    
-    # Validate dithering section
-    if "dithering" in config:
-        dith = config["dithering"]
-        if not isinstance(dith, dict):
-            errors.append("'dithering' must be an object/dictionary")
-        else:
-            if "mode" in dith and dith["mode"] not in VALID_DITHER_MODES:
-                errors.append(f"Invalid dither mode: '{dith['mode']}'. Must be one of: {VALID_DITHER_MODES}")
-    
-    # Validate palette section
-    if "palette" in config:
-        pal = config["palette"]
-        if not isinstance(pal, dict):
-            errors.append("'palette' must be an object/dictionary")
-        else:
-            if "source" in pal:
-                source = pal["source"]
-                # Can be a valid source, custom palette name, or "file:path"
-                is_valid = (source in VALID_PALETTE_SOURCES or 
-                           source.startswith("file:") or 
-                           source.startswith("custom:"))
-                
-                # Also check if it's a palette name from palette.json
-                if not is_valid:
-                    try:
-                        palette_mgr = PaletteManager()
-                        palette_names = [p['name'] for p in palette_mgr.palettes]
-                        if source in palette_names:
-                            is_valid = True
-                    except:
-                        pass  # If palette manager fails, continue with validation
-                
-                if not is_valid:
-                    errors.append(f"Invalid palette source: '{source}'")
-            
-            if "num_colors" in pal:
-                try:
-                    num_colors = int(pal["num_colors"])
-                    if num_colors <= 0:
-                        errors.append("'palette.num_colors' must be positive")
-                except (ValueError, TypeError):
-                    errors.append("'palette.num_colors' must be an integer")
-    
-    # Validate final_resize section
-    if "final_resize" in config:
-        resize = config["final_resize"]
-        if not isinstance(resize, dict):
-            errors.append("'final_resize' must be an object/dictionary")
-        else:
-            if "multiplier" in resize:
-                try:
-                    mult = int(resize["multiplier"])
-                    if mult <= 0:
-                        errors.append("'final_resize.multiplier' must be positive")
-                except (ValueError, TypeError):
-                    errors.append("'final_resize.multiplier' must be an integer")
-    
-    # If any errors, raise
+            for key, value in values.items():
+                config[name].setdefault(key, deepcopy(value))
     if errors:
-        error_msg = "Configuration validation failed:\n" + "\n".join(f"  • {e}" for e in errors)
-        raise ConfigValidationError(error_msg)
-    
-    # Normalize paths (resolve relative to config file)
-    config_dir = config_path.parent
-    
-    # Resolve input path
-    input_path = Path(config["input"])
-    if not input_path.is_absolute():
-        input_path = (config_dir / input_path).resolve()
-    config["input"] = str(input_path)
-    
-    # Resolve output path
-    output_path = Path(config["output"])
-    if not output_path.is_absolute():
-        output_path = (config_dir / output_path).resolve()
-    config["output"] = str(output_path)
-    
-    # Check if input exists (skip if we're going to override it)
-    if not skip_input_check and not Path(config["input"]).exists():
+        raise ConfigValidationError("Configuration validation failed: " + "; ".join(errors))
+
+    for name in ('input', 'output'):
+        if skip_input_check:
+            # Both paths will be replaced by the CLI input override.
+            config.setdefault(name, '.')
+        if name not in config:
+            errors.append(f"Missing required field: '{name}'")
+        elif not isinstance(config[name], str) or not config[name].strip():
+            errors.append(f"'{name}' must be a nonempty path string")
+
+    config.setdefault('mode', None)
+    if config['mode'] is not None and config['mode'] not in VALID_MODES:
+        errors.append(f"Invalid mode: {config['mode']!r}. Must be one of: {VALID_MODES}")
+    pix, dith, pal, resize = (config[name] for name in defaults)
+    if pix['method'] not in VALID_PIXELIZATION_METHODS:
+        errors.append(f"Invalid pixelization method: {pix['method']!r}")
+    if dith['mode'] not in VALID_DITHER_MODES:
+        errors.append(f"Invalid dither mode: {dith['mode']!r}")
+    if not isinstance(dith['parameters'], dict):
+        errors.append("'dithering.parameters' must be an object/dictionary")
+    for name in ('pixelization', 'dithering', 'final_resize'):
+        if not isinstance(config[name]['enabled'], bool):
+            errors.append(f"'{name}.enabled' must be a boolean")
+    if not isinstance(pal['use_gamma'], bool):
+        errors.append("'palette.use_gamma' must be a boolean")
+
+    _normalize_integer(pix, 'max_size', 'pixelization.max_size', 2, errors)
+    _normalize_integer(pal, 'num_colors', 'palette.num_colors', 1, errors)
+    _normalize_integer(resize, 'multiplier', 'final_resize.multiplier', 1, errors)
+
+    source = pal['source']
+    if not isinstance(source, str) or not source:
+        errors.append("'palette.source' must be a nonempty string")
+    elif source not in VALID_PALETTE_SOURCES:
+        if source.startswith(('file:', 'custom:')):
+            if not source.split(':', 1)[1].strip():
+                errors.append("'palette.source' requires a path or palette name after ':'")
+        else:
+            palette_names = [p['name'] for p in PaletteManager().palettes]
+            if source not in palette_names:
+                errors.append(f"Invalid palette source: {source!r}")
+    if errors:
+        raise ConfigValidationError("Configuration validation failed:\n" +
+                                    "\n".join(f"  - {error}" for error in errors))
+
+    for name in ('input', 'output'):
+        path = Path(config[name])
+        if not path.is_absolute():
+            path = Path(config_path).parent / path
+        config[name] = str(path.resolve())
+    if not skip_input_check and not Path(config['input']).exists():
         raise ConfigValidationError(f"Input file/directory not found: {config['input']}")
-    
-    # Set defaults for optional fields
-    config.setdefault("mode", None)  # Will be auto-detected
-    config.setdefault("pixelization", {"enabled": False})
-    config.setdefault("dithering", {"enabled": True, "mode": DitherMode.BAYER.value, "parameters": {}})
-    config.setdefault("palette", {"source": PaletteSource.MEDIAN_CUT.value, "num_colors": 16, "use_gamma": False})
-    config.setdefault("final_resize", {"enabled": False, "multiplier": 2})
-    
-    # Ensure nested defaults
-    config["pixelization"].setdefault("enabled", False)
-    config["pixelization"].setdefault("method", PixelizeMethod.REGULAR.value)
-    config["pixelization"].setdefault("max_size", 128)
-    
-    config["dithering"].setdefault("enabled", True)
-    config["dithering"].setdefault("mode", "bayer")
-    config["dithering"].setdefault("parameters", {})
-    
-    config["palette"].setdefault("source", PaletteSource.MEDIAN_CUT.value)
-    config["palette"].setdefault("num_colors", 16)
-    config["palette"].setdefault("use_gamma", False)
-    
-    config["final_resize"].setdefault("enabled", False)
-    config["final_resize"].setdefault("multiplier", 2)
-    
     return config
 
 

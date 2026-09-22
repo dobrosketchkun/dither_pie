@@ -604,7 +604,7 @@ def process_folder(config: Dict[str, Any]) -> bool:
         config: Validated configuration dictionary
         
     Returns:
-        True if at least one file processed successfully, False otherwise
+        True only if every discovered file processed successfully, False otherwise
     """
     try:
         input_path = Path(config["input"])
@@ -686,7 +686,7 @@ def process_folder(config: Dict[str, Any]) -> bool:
                     
                 except KeyboardInterrupt:
                     logger.warning("\n[yellow]Processing interrupted by user[/]")
-                    break
+                    raise
                 except Exception as e:
                     logger.error(f"Error processing {image_file.name}: {e}")
                     failed_count += 1
@@ -724,7 +724,7 @@ def process_folder(config: Dict[str, Any]) -> bool:
                     
                 except KeyboardInterrupt:
                     logger.warning("\n[yellow]Processing interrupted by user[/]")
-                    break
+                    raise
                 except Exception as e:
                     logger.error(f"Error processing {video_file.name}: {e}")
                     failed_count += 1
@@ -744,7 +744,7 @@ def process_folder(config: Dict[str, Any]) -> bool:
             for failed_file in failed_files:
                 logger.info(f"  • {failed_file}")
         
-        return success_count > 0
+        return failed_count == 0 and success_count == total_files
         
     except Exception as e:
         logger.error(f"Failed to process folder: {e}", exc_info=True)

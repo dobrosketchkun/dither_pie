@@ -80,6 +80,10 @@ class NeuralPixelizer:
     @staticmethod
     def _compute_even_dimensions(orig_w: int, orig_h: int, max_size: int) -> Tuple[int, int]:
         """Compute even dimensions for video codec compatibility."""
+        if isinstance(max_size, bool) or not isinstance(max_size, int) or max_size < 2:
+            raise ValueError("max_size must be an integer of at least 2")
+        if orig_w <= 0 or orig_h <= 0:
+            raise ValueError("Image dimensions must be positive")
         if orig_w >= orig_h:
             target_h = max_size if max_size % 2 == 0 else max_size - 1
             target_w = int(round((orig_w / orig_h) * target_h))

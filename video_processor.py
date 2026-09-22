@@ -4,6 +4,9 @@ Optimized to prevent freezing and handle large videos efficiently.
 """
 
 import os
+import json
+import math
+from fractions import Fraction
 import sys
 import subprocess
 import tempfile
@@ -98,79 +101,20 @@ class VideoProcessor:
                 print(f"ERROR: Could not find any successful frame to copy for {failed_frame.name}", file=sys.stderr)
             
     def get_video_info(self, video_path: str) -> dict:
-        """
-        Extract video metadata using ffprobe.
-        
-        Returns:
-            dict with keys: fps, width, height, duration, frame_count
-        """
+        """Read named ffprobe fields; never invent dimensions or a frame rate."""
+        command = [
+            'ffprobe', '-v', 'error', '-select_streams', 'v:0',
+            '-show_entries',
+            'stream=width,height,avg_frame_rate,r_frame_rate,duration,nb_frames:'
+            'format=duration:stream_tags=rotate:stream_side_data=rotation',
+            '-of', 'json', str(video_path),
+        ]
         try:
-            # Get FPS separately for more reliable parsing
-            fps_cmd = [
-                "ffprobe", "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "stream=r_frame_rate",
-                "-of", "default=nokey=1:noprint_wrappers=1",
-                video_path
-            ]
-            fps_result = subprocess.run(fps_cmd, capture_output=True, text=True, check=True)
-            fps_str = fps_result.stdout.strip()
-            
-            if "/" in fps_str:
-                num, den = fps_str.split("/")
-                fps = float(num) / float(den)
-            else:
-                fps = float(fps_str) if fps_str else 30.0
-            
-            # Get dimensions separately
-            dims_cmd = [
-                "ffprobe", "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "stream=width,height",
-                "-of", "default=nokey=1:noprint_wrappers=1",
-                video_path
-            ]
-            dims_result = subprocess.run(dims_cmd, capture_output=True, text=True, check=True)
-            dims_lines = dims_result.stdout.strip().split('\n')
-            width = int(dims_lines[0]) if len(dims_lines) > 0 else 1920
-            height = int(dims_lines[1]) if len(dims_lines) > 1 else 1080
-            
-            # Get duration and frame count
-            info_cmd = [
-                "ffprobe", "-v", "error", "-select_streams", "v:0",
-                "-show_entries", "stream=duration,nb_frames",
-                "-of", "default=nokey=1:noprint_wrappers=1",
-                video_path
-            ]
-            info_result = subprocess.run(info_cmd, capture_output=True, text=True, check=True)
-            info_lines = info_result.stdout.strip().split('\n')
-            
-            duration = None
-            frame_count = None
-            for line in info_lines:
-                if line and line != 'N/A':
-                    try:
-                        val = float(line)
-                        if val > 100:  # Likely frame count
-                            frame_count = int(val)
-                        else:  # Likely duration
-                            duration = val
-                    except:
-                        pass
-            
-            # Estimate frame count if not available
-            if frame_count is None and duration is not None:
-                frame_count = int(duration * fps)
-                
-            return {
-                'fps': fps,
-                'width': width,
-                'height': height,
-                'duration': duration,
-                'frame_count': frame_count
-            }
-        except Exception as e:
-            print(f"Warning: Could not get video info: {e}", file=sys.stderr)
-            return {'fps': 30.0, 'width': 1920, 'height': 1080, 'duration': None, 'frame_count': None}
-    
+            result = subprocess.run(command, capture_output=True, text=True, check=True)
+        except subprocess.CalledProcessError as error:
+            raise ValueError(f"Cannot probe video: {error.stderr.strip()}") from error
+        return _parse_video_info(json.loads(result.stdout))
+
     def process_video_streaming(self,
                                 input_path: str,
                                 output_path: str,
@@ -475,3 +419,60 @@ def _process_single_frame(frame_path: Path,
     except Exception as e:
         print(f"Error processing frame {frame_path}: {e}", file=sys.stderr)
         return False
+
+
+def _parse_video_info(metadata: dict) -> dict:
+    streams = metadata.get('streams', [])
+    if not streams:
+        raise ValueError('Input has no video stream')
+    stream = streams[0]
+    try:
+        width, height = int(stream['width']), int(stream['height'])
+        if width <= 0 or height <= 0:
+            raise ValueError
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError('Video dimensions are missing or invalid') from error
+
+    rate = None
+    for field in ('avg_frame_rate', 'r_frame_rate'):
+        try:
+            candidate = Fraction(str(stream.get(field, '0/0')))
+            if candidate > 0:
+                rate = candidate
+                break
+        except (ValueError, ZeroDivisionError):
+            continue
+    if rate is None:
+        raise ValueError('Video frame rate is missing or invalid')
+
+    duration = None
+    for value in (stream.get('duration'), metadata.get('format', {}).get('duration')):
+        try:
+            candidate = float(value)
+            if math.isfinite(candidate) and candidate > 0:
+                duration = candidate
+                break
+        except (ValueError, TypeError):
+            continue
+    try:
+        frame_count = int(stream.get('nb_frames'))
+        if frame_count <= 0:
+            frame_count = None
+    except (ValueError, TypeError):
+        frame_count = None
+    if frame_count is None and duration is not None:
+        frame_count = max(1, round(duration * float(rate)))
+
+    # FFmpeg autorotates decoded frames by default; report their display size.
+    rotation = stream.get('tags', {}).get('rotate', 0)
+    for data in stream.get('side_data_list', []):
+        if 'rotation' in data:
+            rotation = data['rotation']
+            break
+    try:
+        if round(float(rotation)) % 180 in (90,):
+            width, height = height, width
+    except (TypeError, ValueError):
+        pass
+    return {'fps': float(rate), 'fps_fraction': str(rate), 'width': width,
+            'height': height, 'duration': duration, 'frame_count': frame_count}

@@ -96,7 +96,7 @@ class Preferences(Dialog):
         chrome.switch.configure(command=set_chrome)
         chrome.grid(row=0, column=0, sticky="ew")
         Divider(beh.body).grid(row=1, column=0, sticky="ew", pady=12)
-        live = Toggle(beh.body, "Live preview updates", "After applying a preview to the current source.", app.live_var.get())
+        live = Toggle(beh.body, "Live preview updates", "Update when gamma, size or parameters change.", app.live_var.get())
         live.switch.configure(command=lambda: app.live_var.set(live.get()))
         live.grid(row=2, column=0, sticky="ew")
         Divider(beh.body).grid(row=3, column=0, sticky="ew", pady=12)

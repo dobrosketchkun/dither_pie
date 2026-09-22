@@ -64,8 +64,11 @@ closes. Grid resizing invalidates an older conversion.
 
 Palette cards retain the prototype layout, category filters and real swatches.
 Preferences retain its theme cards and color samples. Long recent filenames use
-middle ellipsis with the full path available on hover. Dithering is explicitly
-activated per source and reset by pixelization. Switching preview resolutions
+middle ellipsis with the full path available on hover. Selecting a palette or
+algorithm applies it immediately; live parameter changes also refresh previews.
+Loading a source or pixelizing does not implicitly reapply dithering. The viewer
+shows animated activity and identifies the applied palette and algorithm.
+Switching preview resolutions
 preserves the scene footprint and pan; comparison resamples each original source
 directly rather than reducing the baseline to the processed image's resolution.
 

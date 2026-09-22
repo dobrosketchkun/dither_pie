@@ -19,9 +19,12 @@ then save from Export. Pixelization sizes the **shorter edge**, with even output
 dimensions. The full production pixelization editor retains grid alignment,
 brush/wand/picker tools, transparency, undo/redo and apply/cancel.
 
-Click **Update preview** to apply dithering to the current source; subsequent
-palette and parameter changes update it in the background. Loading or pixelizing
-a source starts with an undithered result. View switching preserves zoom framing
+Choosing a palette or algorithm immediately previews it on the current source.
+With **Live preview** enabled, gamma, palette size and parameter changes also
+update the preview. **Update preview** remains available for manual refresh.
+Loading or pixelizing a source starts with an undithered result. An animated
+indicator beside the image shows work in progress, then identifies the applied
+palette and algorithm. View switching preserves zoom framing
 and pan; comparison can use the original or pixelized image as its baseline.
 The mode gallery loads bundled, pre-rendered examples from the actual algorithms
 (its blue-noise thumbnail uses a smaller 32×32 matrix). Video export uses the

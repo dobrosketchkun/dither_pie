@@ -215,10 +215,10 @@ class Card(ctk.CTkFrame):
             col = 0
             if icon:
                 # Decoration stays neutral; the accent is spent on actions.
-                Icon(head, icon, 12, T.c("faint")).grid(row=0, column=0,
+                Icon(head, icon, 12, T.c("faint"), height=16).grid(row=0, column=0,
                                                         padx=(0, 7))
                 col = 1
-            Label(head, T.caps(title), "eyebrow", T.c("dim")).grid(
+            Label(head, T.caps(title), "eyebrow", T.c("dim"), height=16).grid(
                 row=0, column=col, sticky="w")
             for i, (ic, cb, tip) in enumerate(actions):
                 IconBtn(head, ic, cb, size=24, glyph=12, tooltip=tip).grid(
@@ -275,9 +275,9 @@ class Field(ctk.CTkFrame):
         head = ctk.CTkFrame(self, fg_color="transparent")
         head.grid(row=0, column=0, sticky="ew")
         head.grid_columnconfigure(0, weight=1)
-        Label(head, T.caps(label), "eyebrow", T.c("dim")).grid(
+        Label(head, T.caps(label), "eyebrow", T.c("dim"), height=16).grid(
             row=0, column=0, sticky="w")
-        self.value_label = Label(head, hint or "", "mono_s", T.c("faint"))
+        self.value_label = Label(head, hint or "", "mono_s", T.c("faint"), height=16)
         self.value_label.grid(row=0, column=1, sticky="e")
         self.control = ctk.CTkFrame(self, fg_color="transparent")
         self.control.grid(row=1, column=0, sticky="ew", pady=(5, 0))
@@ -379,9 +379,10 @@ class SliderField(Field):
         except ValueError:
             self._sync_entry()
             return
+        changed = v != self.var.get()
         self.var.set(v)
         self._sync_entry()
-        if self._cmd:
+        if changed and self._cmd:
             self._cmd(self.get())
 
     def get(self):
@@ -448,15 +449,15 @@ class Toggle(ctk.CTkFrame):
                  command: Callable = None, **kw):
         super().__init__(master, fg_color="transparent", **kw)
         self.grid_columnconfigure(0, weight=1)
-        Label(self, text, "body").grid(row=0, column=0, sticky="w")
+        Label(self, text, "body", height=18).grid(row=0, column=0, sticky="w")
         if hint:
-            Label(self, hint, "tiny", T.c("faint"), justify="left").grid(
+            Label(self, hint, "tiny", T.c("dim"), justify="left", height=15).grid(
                 row=1, column=0, sticky="w", pady=(1, 0))
         self.var = tk.BooleanVar(value=value)
         self.switch = ctk.CTkSwitch(
             self, text="", variable=self.var, width=40,
             switch_width=38, switch_height=18, corner_radius=10,
-            fg_color=T.c("card_hi"), progress_color=T.accent(),
+            fg_color=("#8B8B86", "#696963"), progress_color=T.accent(),
             button_color=("#FFFFFF", "#E7EBF2"),
             button_hover_color=("#FFFFFF", "#FFFFFF"),
             command=command,
@@ -560,18 +561,18 @@ class PaletteCard(ctk.CTkFrame):
         self.grid_columnconfigure(0, weight=1)
 
         head = ctk.CTkFrame(self, fg_color="transparent")
-        head.grid(row=0, column=0, sticky="ew", padx=10, pady=(8, 0))
+        head.grid(row=0, column=0, sticky="ew", padx=10, pady=(6, 0))
         head.grid_columnconfigure(0, weight=1)
-        Label(head, name, "strong").grid(row=0, column=0, sticky="w")
+        Label(head, name, "strong", height=18).grid(row=0, column=0, sticky="w")
         meta = "%d colors" % len(colors) if colors else placeholder
         if badge:
             meta = badge + " · " + meta
-        Label(head, meta, "tiny", T.c("faint")).grid(row=1, column=0,
+        Label(head, meta, "tiny", T.c("dim"), height=14).grid(row=1, column=0,
                                                      sticky="w", pady=(1, 0))
 
         self.strip = SwatchStrip(self, colors, height=16,
                                  bg_token=T.c("card_alt"))
-        self.strip.grid(row=1, column=0, sticky="ew", padx=10, pady=(7, 10))
+        self.strip.grid(row=1, column=0, sticky="ew", padx=10, pady=(5, 7))
 
         self._check = Icon(self, "check_c", 15, T.accent_text())
 

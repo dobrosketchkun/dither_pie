@@ -263,7 +263,7 @@ class ModernApp(PalettePanel, Operations, WindowChrome, winchrome.StableTitlebar
     def _on_dither_mode_changed(self, _value):
         self._build_parameters()
         self._update_dither_settings_button_state()
-        self._request_preview()
+        self._request_preview(activate=True)
 
     def _reset_parameters(self):
         self.dither_parameters.pop(self.dither_mode.get(), None)
@@ -300,6 +300,14 @@ class ModernApp(PalettePanel, Operations, WindowChrome, winchrome.StableTitlebar
         self.view_seg = Segmented(self.main_frame, ['Original', 'Pixelized', 'Dithered'],
                                   command=self.show_view, seg_width=95)
         self.view_seg.place(x=14, y=14)
+        self.preview_feedback = ctk.CTkFrame(self.main_frame, fg_color=T.c('surface'),
+            corner_radius=T.R_CTRL, border_width=1, border_color=T.c('border'))
+        self.preview_feedback.place(relx=1, x=-14, y=14, anchor='ne')
+        self.preview_feedback_label = Label(self.preview_feedback, 'Open an image or video',
+            'small', height=18, wraplength=220, justify='left')
+        self.preview_feedback_label.pack(padx=10, pady=7)
+        self.preview_activity = ctk.CTkProgressBar(self.preview_feedback, width=220, height=4,
+            mode='indeterminate', progress_color=T.accent(), fg_color=T.c('border'))
         controls = ctk.CTkFrame(self.main_frame, fg_color=T.c('surface'))
         controls.place(relx=.5, rely=1, y=-16, anchor='s')
         self.btn_fit = IconBtn(controls, 'fit', self.fit_to_window, tooltip='Fit (F)')
@@ -323,6 +331,15 @@ class ModernApp(PalettePanel, Operations, WindowChrome, winchrome.StableTitlebar
     def set_status(self, text, tone='idle'):
         if hasattr(self, 'status_bar'):
             self.status_bar.set(text, tone, busy=tone == 'busy')
+        if hasattr(self, 'preview_feedback_label'):
+            self.preview_feedback_label.configure(text=text,
+                text_color=T.c('err') if tone == 'err' else T.c('text'))
+            self.preview_activity.stop()
+            if tone == 'busy':
+                self.preview_activity.pack(padx=10, pady=(0, 7))
+                self.preview_activity.start()
+            else:
+                self.preview_activity.pack_forget()
 
     def select_panel(self, index):
         for i, panel in enumerate(self.panels):

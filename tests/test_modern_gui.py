@@ -267,7 +267,46 @@ class ModernGUITests(unittest.TestCase):
         app.gamma_var.set(not app.gamma_var.get())
         app._request_preview()
         self.finish()
-        self.assertIsNone(app.dithered_image)
+        self.assertIsNotNone(app.dithered_image)
+
+    def test_palette_and_algorithm_choices_preview_and_report_activity(self):
+        from threading import Event
+        release, started = Event(), Event()
+        self.addCleanup(release.set)
+        self.load()
+        app = self.app
+        original = DitherRequest.render
+        def slow(request, source):
+            started.set()
+            release.wait(10)
+            return original(request, source)
+        with patch.object(DitherRequest, 'render', slow):
+            app.palette_var.set('Test')
+            self.pump(.4)
+            self.assertTrue(started.is_set())
+            self.assertTrue(app.preview_activity.winfo_ismapped())
+            self.assertIsNotNone(app.status_bar._spin_after)
+            release.set()
+            self.finish()
+        self.assertEqual(app.display_state, 'dithered')
+        self.assertIn('Applied: Test', app.preview_feedback_label.cget('text'))
+        self.assertFalse(app.preview_activity.winfo_ismapped())
+        app.show_view('Original')
+        app.dither_mode.set(DitherMode.NONE.value)
+        app._on_dither_mode_changed(DitherMode.NONE.value)
+        self.finish()
+        self.assertEqual(app.display_state, 'dithered')
+        self.assertIn(DitherMode.NONE.value, app.preview_feedback_label.cget('text'))
+
+    def test_palette_layout_is_compact_and_toggle_has_visible_track(self):
+        app = self.app
+        app.select_panel(2)
+        self.pump()
+        card = app.gamma.master.master
+        self.assertLess(card.winfo_height() / card._get_widget_scaling(), 180)
+        palette_card = next(iter(app.palette_cards.values()))
+        self.assertLess(palette_card.winfo_height() / palette_card._get_widget_scaling(), 78)
+        self.assertNotEqual(app.gamma.switch.cget('fg_color'), card.cget('fg_color'))
 
     def test_view_switches_preserve_scene_size_pan_and_comparison(self):
         self.load()

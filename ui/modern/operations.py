@@ -45,14 +45,18 @@ class Operations:
             self.after_cancel(self._preview_after)
             self._preview_after = None
 
-    def _request_preview(self, *_):
+    def _request_preview(self, *_, activate=False):
         self._cancel_preview()
         self._preview_dirty = True
         if self.current_image is None or self._image_busy:
             return
-        if self.live_var.get() and self._preview_enabled_for_source:
-            self._preview_after = self.after(180, lambda: self._on_apply_dithering(activate=False))
-        self.set_status('Settings changed — update preview')
+        if activate:
+            self._preview_enabled_for_source = True
+        if activate or self.live_var.get():
+            self._preview_after = self.after(180, lambda: self._on_apply_dithering(activate=True))
+            self.set_status('Preparing preview…', 'busy')
+        else:
+            self.set_status('Settings changed — update preview', 'warn')
 
     def _request_snapshot(self):
         name = self.palette_var.get()
@@ -92,7 +96,7 @@ class Operations:
             if view_revision == self._view_revision and (activate or self.display_state == 'dithered'):
                 self.show_view('Dithered')
             self._update_resize_preview()
-            self.set_status('Preview ready')
+            self.set_status(f'Applied: {request.palette_name} · {request.mode}')
         self._preview_jobs.submit(lambda: request.render(source), done, self._error)
 
     def _begin_image_job(self, compute, on_result, text):

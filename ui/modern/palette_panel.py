@@ -17,7 +17,7 @@ class PalettePanel:
             self.config.get('defaults', 'num_colors'), 1, (1, 256), self._palette_count_changed).entry
         self.gamma = Toggle(body, 'Gamma correction', 'Mix colors in linear light.',
             self.config.get('defaults', 'use_gamma'), command=self._request_preview)
-        self.gamma.grid(row=2, column=0, sticky='ew', pady=(14, 0))
+        self.gamma.grid(row=2, column=0, sticky='ew', pady=(6, 0))
         self.gamma_var = self.gamma.var
         self.palette_var = tk.StringVar(value=GENERATED[0])
         self.palette_var.trace_add('write', self._palette_changed)
@@ -127,7 +127,7 @@ class PalettePanel:
         for name, card in getattr(self, 'palette_cards', {}).items():
             card.set_selected(name == self.palette_var.get())
         self._update_delete_palette()
-        self._request_preview()
+        self._request_preview(activate=True)
 
     def _delete_palette(self):
         name = self.palette_var.get()

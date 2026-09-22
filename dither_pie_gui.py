@@ -988,7 +988,32 @@ class DitheringApp(ctk.CTk):
         from collections import OrderedDict
         preview_cache = OrderedDict()
         max_cache_size = 30
-        is_generating = [False]  # Use list for mutable flag
+        from copy import deepcopy
+        from ui.preview_jobs import LatestPreviewJob
+        preview_jobs = LatestPreviewJob()
+        apply_requested = [False]
+        poll_id = [None]
+
+        def stop_previews():
+            preview_jobs.close()
+            if poll_id[0] is not None:
+                try:
+                    dialog.after_cancel(poll_id[0])
+                except tk.TclError:
+                    pass
+                poll_id[0] = None
+
+        def poll_previews():
+            poll_id[0] = None
+            preview_jobs.poll()
+            if dialog.winfo_exists():
+                poll_id[0] = dialog.after(30, poll_previews)
+
+        dialog.bind('<Destroy>', lambda event: stop_previews() if event.widget is dialog else None)
+
+        def preview_key(name, palette, gamma, mode, params):
+            return (name, tuple(tuple(color) for color in palette), gamma, mode,
+                    json.dumps(params, sort_keys=True))
         
         ctk.CTkLabel(dialog, text="Choose Palette:", 
                     font=("Arial", 14, "bold")).pack(pady=2)
@@ -1064,15 +1089,9 @@ class DitheringApp(ctk.CTk):
             # Regenerate current preview if one is selected
             palette_name, palette = get_selected_palette()
             if palette_name and palette:
-                threading.Thread(
-                    target=lambda: generate_preview(palette_name, palette),
-                    daemon=True
-                ).start()
+                generate_preview(palette_name, palette)
             elif current_palette_name[0] and current_palette_data[0]:
-                threading.Thread(
-                    target=lambda: generate_preview(current_palette_name[0], current_palette_data[0]),
-                    daemon=True
-                ).start()
+                generate_preview(current_palette_name[0], current_palette_data[0])
         
         def on_dither_mode_changed_internal():
             """Regenerate preview when dither mode dropdown is changed."""
@@ -1080,88 +1099,48 @@ class DitheringApp(ctk.CTk):
             # Just regenerate current preview if one is selected
             palette_name, palette = get_selected_palette()
             if palette_name and palette:
-                threading.Thread(
-                    target=lambda: generate_preview(palette_name, palette),
-                    daemon=True
-                ).start()
+                generate_preview(palette_name, palette)
             elif current_palette_name[0] and current_palette_data[0]:
-                threading.Thread(
-                    target=lambda: generate_preview(current_palette_name[0], current_palette_data[0]),
-                    daemon=True
-                ).start()
+                generate_preview(current_palette_name[0], current_palette_data[0])
         
         # Connect dither mode change callback
         self.on_dither_mode_changed_callback = on_dither_mode_changed_internal
         
         def generate_preview(palette_name, palette):
-            """Generate preview and display in MAIN viewer window."""
-            if is_generating[0]:
-                return  # Skip if already generating
-            
-            # Create cache key that includes gamma state, dither mode, AND dither parameters
-            dither_mode_val = self.dither_mode.get()
-            mode_params = self.dither_parameters.get(dither_mode_val, {})
-            # Convert params dict to a stable string for cache key
-            params_str = "_".join(f"{k}={v}" for k, v in sorted(mode_params.items()))
-            cache_key = f"{palette_name}_gamma{gamma_var.get()}_dither{dither_mode_val}_params{params_str}"
-            
-            # Check cache first
-            if cache_key in preview_cache:
-                # LRU: Move to end (mark as recently used)
-                preview_cache.move_to_end(cache_key)
-                self.after(0, lambda: display_preview(preview_cache[cache_key]))
-                self.after(0, lambda: self.status_bar.set_status(f"Preview: {palette_name} (cached)"))
-                return
-            
-            is_generating[0] = True
-            self.after(0, lambda: self.status_bar.set_status(f"Generating preview: {palette_name}...", spinning=True))
-            
-            try:
-                # Store current palette info for gamma refresh
-                current_palette_name[0] = palette_name
-                current_palette_data[0] = palette
-                
-                # Get current dither mode
-                try:
-                    dither_mode = DitherMode(self.dither_mode.get())
-                except:
-                    dither_mode = DitherMode.BAYER
+            """Snapshot settings on the UI thread and request the latest preview."""
+            mode_value = self.dither_mode.get()
+            mode_params = deepcopy(self.dither_parameters.get(mode_value, {}))
+            gamma = gamma_var.get()
+            palette = [tuple(color) for color in palette]
+            key = preview_key(palette_name, palette, gamma, mode_value, mode_params)
+            current_palette_name[0] = palette_name
+            current_palette_data[0] = palette
 
-                # Create ditherer with gamma from dialog
-                # Get custom parameters for this mode
-                mode_params = self.dither_parameters.get(dither_mode.value, {})
-                
-                ditherer = ImageDitherer(
-                    num_colors=num_colors,
-                    dither_mode=dither_mode,
-                    palette=palette,
-                    use_gamma=gamma_var.get(),
-                    dither_params=mode_params
-                )
-                
-                # Apply dithering to source image
-                preview_result = ditherer.apply_dithering(source_image)
-                # NOTE: Do NOT apply final_resize here - we want to see the actual dithered pixels
-                # Final resize should only happen when saving
-                
-                # Cache the result with gamma in key (LRU: add to end)
-                preview_cache[cache_key] = preview_result
-                
-                # LRU eviction: Remove oldest if cache exceeds max size
+            def completed(result):
+                preview_cache[key] = result
+                preview_cache.move_to_end(key)
                 if len(preview_cache) > max_cache_size:
-                    preview_cache.popitem(last=False)  # Remove first (oldest) item
-                
-                # Display in MAIN viewer
-                self.after(0, lambda: display_preview(preview_result))
-                gamma_text = " (gamma)" if gamma_var.get() else ""
-                self.after(0, lambda: self.status_bar.set_status(f"Preview: {palette_name}{gamma_text}", spinning=False))
-                
-            except Exception as e:
-                print(f"Preview generation error: {e}")
-                self.after(0, lambda: self.status_bar.set_status(f"Preview error: {str(e)[:50]}", spinning=False))
-            finally:
-                is_generating[0] = False
-        
+                    preview_cache.popitem(last=False)
+                display_preview(result)
+                self.status_bar.set_status(f"Preview: {palette_name}", spinning=False)
+                if apply_requested[0]:
+                    on_ok()
+
+            def failed(error):
+                apply_requested[0] = False
+                apply_button.configure(state='normal', text='Apply Selected')
+                self.status_bar.set_status(f"Preview error: {str(error)[:100]}", spinning=False)
+
+            if key in preview_cache:
+                preview_jobs.invalidate()
+                completed(preview_cache[key])
+                return
+
+            self.status_bar.set_status(f"Generating preview: {palette_name}...", spinning=True)
+            ditherer = ImageDitherer(num_colors=num_colors, dither_mode=DitherMode(mode_value),
+                                     palette=palette, use_gamma=gamma, dither_params=mode_params)
+            preview_jobs.submit(lambda: ditherer.apply_dithering(source_image), completed, failed)
+
         def display_preview(preview_img):
             """
             Display preview in the MAIN image viewer.
@@ -1197,10 +1176,7 @@ class DitheringApp(ctk.CTk):
             for name, palette in palette_options:
                 if name == palette_name:
                     # Generate preview in background thread
-                    threading.Thread(
-                        target=lambda: generate_preview(name, palette),
-                        daemon=True
-                    ).start()
+                    generate_preview(name, palette)
                     break
         
         # Generate palette options
@@ -1252,6 +1228,7 @@ class DitheringApp(ctk.CTk):
             
             # Clear preview cache when palette list changes
             preview_cache.clear()
+            preview_jobs.invalidate()
             
             for name, palette in palette_options:
                 frame = ctk.CTkFrame(scroll_frame)
@@ -1262,7 +1239,6 @@ class DitheringApp(ctk.CTk):
                     text=name, 
                     variable=selected_var, 
                     value=name,
-                    command=lambda n=name: on_palette_selected(n)
                 )
                 radio.pack(side="left", padx=5)
                 
@@ -1270,18 +1246,19 @@ class DitheringApp(ctk.CTk):
                 from gui_components import PalettePreview
                 preview = PalettePreview(frame, palette, width=220, height=20)
                 preview.pack(side="right", padx=5)
-        
+
+            name, palette = get_selected_palette()
+            if palette is not None:
+                generate_preview(name, palette)
+
         update_palette_list()
         
-        # Generate preview for default selection (Median Cut)
-        for name, palette in palette_options:
-            if name == "Median Cut":
-                threading.Thread(
-                    target=lambda: generate_preview(name, palette),
-                    daemon=True
-                ).start()
-                break
-        
+        # Variable traces also cover programmatic selections (image palettes).
+        selection_trace = selected_var.trace_add(
+            'write', lambda *_: on_palette_selected(selected_var.get())
+        )
+        on_palette_selected(selected_var.get())
+
         # Palette management buttons
         custom_buttons_frame = ctk.CTkFrame(dialog)
         custom_buttons_frame.pack(pady=10, fill='x', padx=10)
@@ -1318,42 +1295,37 @@ class DitheringApp(ctk.CTk):
         ).pack(side="left", padx=2, fill='x', expand=True)
         
         def on_ok():
-            # Save dialog size before closing
+            name, palette = get_selected_palette()
+            if palette is None:
+                return
+            mode_value = self.dither_mode.get()
+            params = self.dither_parameters.get(mode_value, {})
+            key = preview_key(name, palette, gamma_var.get(), mode_value, params)
+            if key not in preview_cache:
+                # Finish this exact selection before closing; never reuse a
+                # previous operation's dithered image as the final result.
+                apply_requested[0] = True
+                apply_button.configure(state='disabled', text='Applying...')
+                generate_preview(name, palette)
+                return
+
+            selected_palette[0] = palette
+            self.dithered_image = preview_cache[key]
+            self.display_state = 'dithered'
+            self.palette_showing_preview = True
+            display_preview(self.dithered_image)
             save_dialog_size()
-            
-            # Find selected palette
-            sel_name = selected_var.get()
-            for name, palette in palette_options:
-                if name == sel_name:
-                    selected_palette[0] = palette
-                    break
-            
-            # The preview is already showing in the main window
-            # If it's cached, use that, otherwise it will be generated below
-            dither_mode_val = self.dither_mode.get()
-            mode_params = self.dither_parameters.get(dither_mode_val, {})
-            params_str = "_".join(f"{k}={v}" for k, v in sorted(mode_params.items()))
-            cache_key = f"{sel_name}_gamma{gamma_var.get()}_dither{dither_mode_val}_params{params_str}"
-            if cache_key in preview_cache:
-                # LRU: Move to end (mark as recently used)
-                preview_cache.move_to_end(cache_key)
-                self.dithered_image = preview_cache[cache_key]
-                self.display_state = "dithered"
-            
-            # Re-enable controls before closing
+            stop_previews()
             self._enable_controls()
-            
-            # Reset palette dialog state
             self.palette_dialog_open = False
             self.on_dither_mode_changed_callback = None
-            self.palette_showing_preview = True
             self.palette_original_image = None
             self.palette_preview_zoom_state = None
-            
             self._update_resize_preview()
             dialog.destroy()
-        
+
         def on_cancel():
+            stop_previews()
             # Save dialog size before closing
             save_dialog_size()
             
@@ -1389,7 +1361,9 @@ class DitheringApp(ctk.CTk):
         btn_frame.pack(pady=10)
         
         ctk.CTkButton(btn_frame, text="Cancel", command=on_cancel, width=120).pack(side="left", padx=5)
-        ctk.CTkButton(btn_frame, text="Apply Selected", command=on_ok, width=120).pack(side="right", padx=5)
+        apply_button = ctk.CTkButton(btn_frame, text="Apply Selected", command=on_ok, width=120)
+        apply_button.pack(side="right", padx=5)
+        poll_id[0] = dialog.after(30, poll_previews)
         
         # Wait for dialog to close
         self.wait_window(dialog)
@@ -1404,46 +1378,8 @@ class DitheringApp(ctk.CTk):
         # Save gamma to config as default for next time
         self.config.set("defaults", "use_gamma", value=gamma_var.get())
         
-        # If we already have the result cached from preview, we're done!
-        # The on_ok() already set self.dithered_image from cache
-        # Just need to handle the case where it wasn't cached (shouldn't happen normally)
-        if self.dithered_image is None or self.display_state != "dithered":
-            # Fallback: generate it now (shouldn't be reached if preview worked)
-            try:
-                dither_mode = DitherMode(self.dither_mode.get())
-            except:
-                dither_mode = DitherMode.BAYER
+        self.status_bar.set_status("Dithering applied from preview", spinning=False)
 
-            self.status_bar.set_status("Applying final dithering...", spinning=True)
-            
-            def process():
-                # Get custom parameters for this mode
-                mode_params = self.dither_parameters.get(dither_mode.value, {})
-                
-                ditherer = ImageDitherer(
-                    num_colors=num_colors,
-                    dither_mode=dither_mode,
-                    palette=selected_palette[0],
-                    use_gamma=gamma_var.get(),
-                    dither_params=mode_params
-                )
-                
-                # Use pixelized image if available, otherwise use current image
-                source_for_dithering = self.pixelized_image if self.pixelized_image else self.current_image
-                self.dithered_image = ditherer.apply_dithering(source_for_dithering)
-                # NOTE: Do NOT apply final_resize here - keep dithered image at its actual resolution
-                # Final resize should only happen when saving
-                self.display_state = "dithered"
-                
-                self.after(0, lambda: self.image_viewer.set_image(self.dithered_image, update=False))
-                self.after(0, lambda: self.fit_to_window())
-                self.after(0, lambda: self.status_bar.set_status("Dithering complete", spinning=False))
-            
-            threading.Thread(target=process, daemon=True).start()
-        else:
-            # We have the cached result, just update status
-            self.status_bar.set_status("Dithering applied from preview", spinning=False)
-    
     def _apply_to_video_workflow(self):
         """Handle the full video processing workflow - shows save dialog and processes."""
         if not self.last_palette or not self.dithered_image:

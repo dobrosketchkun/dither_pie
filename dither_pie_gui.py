@@ -28,7 +28,8 @@ from dithering_lib import (
     ImageDitherer,
     ColorReducer
 )
-from video_processor import VideoProcessor, NeuralPixelizer, pixelize_regular
+from video_processor import VideoProcessor
+from pixelization import NeuralPixelizer, pixelize_regular
 from gui_components import (
     ZoomableImage,
     ProgressDialog,

@@ -2177,7 +2177,7 @@ class ImageDitherer:
         if self.use_gamma:
             px = np.clip(DitherUtils.srgb_to_linear(px / 255.0) * 255.0, 0, 255)
         _, idx = KDTree(palette_arr).query(px, k=1, workers=-1)
-        out_8[transparent] = palette_arr[idx].astype(np.uint8)
+        out_8[transparent] = palette_arr[idx]
         return out_8
 
     def apply_dithering(self, image: Image.Image) -> Image.Image:
@@ -2194,20 +2194,16 @@ class ImageDitherer:
         if opaque is not None:
             arr_srgb_8 = bleed_fill(arr_srgb_8, opaque)
 
-        # Optionally go to linear domain
+        # Public palettes are always sRGB, including palettes generated here.
+        # Gamma only changes the working space used to choose palette colors.
+        if self.palette is None:
+            self.palette = ColorReducer.reduce_colors(rgb_image, self.num_colors,
+                                                      mask=opaque)
         if self.use_gamma:
-            arr_01 = arr_srgb_8.astype(np.float32) / 255.0
-            arr_lin_01 = DitherUtils.srgb_to_linear(arr_01)
-            arr_lin_8 = np.clip(arr_lin_01 * 255.0, 0, 255).astype(np.uint8)
-            if self.palette is None:
-                temp_img_lin = Image.fromarray(arr_lin_8, 'RGB')
-                self.palette = ColorReducer.reduce_colors(temp_img_lin, self.num_colors,
-                                                          mask=opaque)
-            arr_for_dith = arr_lin_8
+            arr_for_dith = DitherUtils.srgb_to_linear(
+                arr_srgb_8.astype(np.float32) / 255.0
+            ) * 255.0
         else:
-            if self.palette is None:
-                self.palette = ColorReducer.reduce_colors(rgb_image, self.num_colors,
-                                                          mask=opaque)
             arr_for_dith = arr_srgb_8
 
         # Convert palette to appropriate color space
@@ -2227,8 +2223,13 @@ class ImageDitherer:
         # Error-diffusing strategies use the mask to avoid quantizing invisible
         # pixels and to keep error from crossing the transparency boundary.
         # Pointwise ones ignore it; either way the snap below has the last word.
-        dithered_flat = strategy.dither(flat_pixels, palette_arr, (h, w), mask=opaque)
-        out_arr_lin_8 = dithered_flat.reshape((h, w, 3)).astype(np.uint8)
+        if len(palette_arr) == 1:
+            dithered_flat = np.broadcast_to(palette_arr, flat_pixels.shape).copy()
+        else:
+            dithered_flat = strategy.dither(flat_pixels, palette_arr, (h, w), mask=opaque)
+        # Keep linear values as floats until the final sRGB encoding. Eight-bit
+        # linear quantization destroys dark palette colors in particular.
+        out_arr_lin_8 = dithered_flat.reshape((h, w, 3))
 
         if opaque is not None:
             out_arr_lin_8 = self._snap_transparent(
@@ -2238,10 +2239,10 @@ class ImageDitherer:
         if self.use_gamma:
             out_lin_01 = out_arr_lin_8.astype(np.float32) / 255.0
             out_srgb_01 = DitherUtils.linear_to_srgb(np.clip(out_lin_01, 0, 1))
-            out_srgb_8 = np.clip(out_srgb_01 * 255.0, 0, 255).astype(np.uint8)
+            out_srgb_8 = np.rint(np.clip(out_srgb_01 * 255.0, 0, 255)).astype(np.uint8)
             result = Image.fromarray(out_srgb_8, 'RGB')
         else:
-            result = Image.fromarray(out_arr_lin_8, 'RGB')
+            result = Image.fromarray(out_arr_lin_8.astype(np.uint8), 'RGB')
 
         if alpha is None:
             return result

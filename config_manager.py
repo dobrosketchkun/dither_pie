@@ -29,7 +29,7 @@ class ConfigManager:
         
         # Theme settings
         "theme": {
-            "appearance_mode": "system",  # "system", "dark", "light"
+            "appearance_mode": "light",  # "system", "dark", "light"
             "color_theme": "blue"
         },
         
@@ -47,6 +47,14 @@ class ConfigManager:
             # hard-edged pixel art, and stops an anti-aliased fringe from
             # becoming an opaque halo.
             "alpha_cutoff": 128
+        },
+
+        "modern_gui": {
+            "design_system": "Teenage Engineering",
+            "custom_titlebar": True,
+            "live_preview": True,
+            "video_workers": 4,
+            "dither_parameters": {},
         },
         
         # Last used paths

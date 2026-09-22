@@ -5,6 +5,7 @@ Handles loading, saving, and managing user preferences.
 
 import json
 import os
+from copy import deepcopy
 from typing import Any, Optional, Dict
 from pathlib import Path
 
@@ -91,23 +92,24 @@ class ConfigManager:
             config_file: Path to config file
         """
         self.config_file = config_file
+        create_defaults = not os.path.exists(self.config_file)
         self.config = self._load_config()
+        if create_defaults:
+            self.save()
     
     def _load_config(self) -> Dict:
-        """Load config from file, or create default if not exists."""
+        """Load preferences or return independent defaults without saving."""
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, 'r', encoding='utf-8') as f:
                     loaded = json.load(f)
                 # Merge with defaults to handle new settings
-                return self._merge_configs(self.DEFAULT_CONFIG.copy(), loaded)
+                return self._merge_configs(deepcopy(self.DEFAULT_CONFIG), loaded)
             except Exception as e:
                 print(f"Error loading config: {e}")
-                return self.DEFAULT_CONFIG.copy()
+                return deepcopy(self.DEFAULT_CONFIG)
         else:
-            # Create default config
-            self.save()
-            return self.DEFAULT_CONFIG.copy()
+            return deepcopy(self.DEFAULT_CONFIG)
     
     def _merge_configs(self, default: Dict, loaded: Dict) -> Dict:
         """

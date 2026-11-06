@@ -1,11 +1,33 @@
 """Image view components."""
 
 import tkinter as tk
+import math
 import customtkinter as ctk
 from PIL import Image, ImageTk
 import numpy as np
 
 __all__ = ['ZoomableImage', 'ImageComparisonView']
+
+
+def render_visible_region(image, zoom, viewport, offsets):
+    """Resample only visible display pixels, preserving full-image geometry.
+
+    The tile is bounded by the viewport (plus one pixel for fractional offsets),
+    regardless of how large the fully zoomed image would be.
+    """
+    width, height = int(image.width * zoom), int(image.height * zoom)
+    if width <= 0 or height <= 0:
+        return None
+    vw, vh = viewport
+    x, y = (vw - width) // 2 + offsets[0], (vh - height) // 2 + offsets[1]
+    left, top = max(0, math.floor(-x)), max(0, math.floor(-y))
+    right, bottom = min(width, math.ceil(vw - x)), min(height, math.ceil(vh - y))
+    if right <= left or bottom <= top:
+        return None
+    box = (left * image.width / width, top * image.height / height,
+           right * image.width / width, bottom * image.height / height)
+    tile = image.resize((right - left, bottom - top), Image.Resampling.NEAREST, box=box)
+    return tile, x + left, y + top, (left, top)
 
 
 class ZoomableImage(tk.Canvas):
@@ -85,7 +107,7 @@ class ZoomableImage(tk.Canvas):
         return Image.fromarray(np.tile(tile, reps)[:h, :w], 'RGB')
 
     @classmethod
-    def _composite_for_display(cls, image: Image.Image) -> Image.Image:
+    def _composite_for_display(cls, image: Image.Image, origin=(0, 0)) -> Image.Image:
         """
         Flatten a transparent image onto a checkerboard for display.
 
@@ -97,27 +119,26 @@ class ZoomableImage(tk.Canvas):
         rgba = image.convert('RGBA')
         if rgba.getchannel('A').getextrema()[0] == 255:
             return image  # nothing actually transparent
-        backdrop = cls._make_checkerboard(rgba.width, rgba.height).convert('RGBA')
+        # Keep the checkerboard anchored to the full image when a viewport tile
+        # is cropped out; panning must not restart its pattern at the tile edge.
+        ox, oy = (int(value) % (2 * cls._CHECKER_SQUARE) for value in origin)
+        backdrop = cls._make_checkerboard(rgba.width + ox, rgba.height + oy)
+        backdrop = backdrop.crop((ox, oy, ox + rgba.width, oy + rgba.height)).convert('RGBA')
         return Image.alpha_composite(backdrop, rgba).convert('RGB')
 
     def update_view(self):
+        self.delete("all")
+        self.image_id = None
         if not self.original_image:
             return
-        nw = int(self.original_image.width * self.zoom_factor)
-        nh = int(self.original_image.height * self.zoom_factor)
-        if nw <= 0 or nh <= 0:
+        rendered = render_visible_region(self.original_image, self.zoom_factor,
+            (self.winfo_width(), self.winfo_height()), (self.offset_x, self.offset_y))
+        if rendered is None:
+            self.displayed_image = None
             return
-
-        resized = self.original_image.resize((nw, nh), Image.Resampling.NEAREST)
-        resized = self._composite_for_display(resized)
+        tile, x, y, origin = rendered
+        resized = self._composite_for_display(tile, origin)
         self.displayed_image = ImageTk.PhotoImage(resized)
-
-        cw = self.winfo_width()
-        ch = self.winfo_height()
-        x = (cw - nw)//2 + self.offset_x
-        y = (ch - nh)//2 + self.offset_y
-
-        self.delete("all")
         self.image_id = self.create_image(x, y, anchor='nw', image=self.displayed_image)
 
     def start_pan(self, event):

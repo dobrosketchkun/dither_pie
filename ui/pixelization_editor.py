@@ -2,6 +2,7 @@
 
 import os
 import ctypes
+import math
 import tkinter as tk
 from tkinter import messagebox, colorchooser
 import customtkinter as ctk
@@ -73,6 +74,7 @@ class PixelizationEditorCanvas(ZoomableImage):
 
     def set_mode(self, mode: str):
         self.mode = mode
+        self._last_pan_event = None
         self.highlight_cell = None
         self.update_view()
 
@@ -205,14 +207,21 @@ class PixelizationEditorCanvas(ZoomableImage):
         super().start_pan(event)
 
     def pan(self, event):
+        # A drag may enter the canvas without its press (or after picking a
+        # color). Never use a stale absolute pan anchor in that case.
+        if self._last_pan_event is None:
+            self.start_pan(event)
+            return
+        dx = event.x - self._last_pan_event[0]
+        dy = event.y - self._last_pan_event[1]
+        self.offset_x += dx
+        self.offset_y += dy
         if self.mode == "preview" and self._shift_down(event):
-            if self._last_pan_event:
-                dx = event.x - self._last_pan_event[0]
-                dy = event.y - self._last_pan_event[1]
-                self.preview_grid_offset_x += dx
-                self.preview_grid_offset_y += dy
+            self.preview_grid_offset_x += dx
+            self.preview_grid_offset_y += dy
         self._last_pan_event = (event.x, event.y)
-        super().pan(event)
+        self._auto_fit_on_resize = False
+        self.update_view()
 
     def on_resize(self, event):
         if self._auto_fit_on_resize:
@@ -226,6 +235,10 @@ class PixelizationEditorCanvas(ZoomableImage):
     def zoom(self, event):
         if not self.original_image:
             return
+        old_zoom = self.zoom_factor
+        image_rect = self._get_image_draw_rect()
+        coupled = self.alt_zoom_active and self.mode == "preview"
+        grid_rect = self._get_preview_grid_rect() if coupled else None
         fine = False
         if hasattr(event, "state"):
             fine = bool(event.state & 0x0001)  # Shift key
@@ -235,11 +248,35 @@ class PixelizationEditorCanvas(ZoomableImage):
             factor = step
         else:
             factor = grow
-        self.zoom_factor *= factor
-        self.zoom_factor = max(0.01, min(30.0, self.zoom_factor))
-        if self.alt_zoom_active and self.mode == "preview":
+        if coupled:
+            # Clamp the shared multiplier, not each scale independently. Once
+            # either limit is reached, neither image nor grid may keep moving.
+            if factor > 1:
+                factor = min(factor, max(1.0, 30.0 / self.zoom_factor),
+                             max(1.0, 10.0 / self.preview_grid_scale))
+            else:
+                factor = max(factor, min(1.0, 0.01 / self.zoom_factor),
+                             min(1.0, 0.1 / self.preview_grid_scale))
+            self.zoom_factor *= factor
             self.preview_grid_scale *= factor
-            self.preview_grid_scale = max(0.1, min(10.0, self.preview_grid_scale))
+        else:
+            self.zoom_factor = max(0.01, min(30.0, self.zoom_factor * factor))
+        if self.zoom_factor != old_zoom:
+            # Keep the same point of each independently positioned rectangle
+            # under the pointer. Use actual raster dimensions to account for
+            # integer rounding in the image renderer.
+            new_rect = self._get_image_draw_rect()
+            if image_rect and new_rect:
+                u = (event.x - image_rect[0]) / image_rect[2]
+                v = (event.y - image_rect[1]) / image_rect[3]
+                self.offset_x += event.x - (new_rect[0] + u * new_rect[2])
+                self.offset_y += event.y - (new_rect[1] + v * new_rect[3])
+            if grid_rect:
+                new_grid = self._get_preview_grid_rect()
+                u = (event.x - grid_rect[0]) / grid_rect[2]
+                v = (event.y - grid_rect[1]) / grid_rect[3]
+                self.preview_grid_offset_x += event.x - (new_grid[0] + u * new_grid[2])
+                self.preview_grid_offset_y += event.y - (new_grid[1] + v * new_grid[3])
         self._auto_fit_on_resize = False
         self.update_view()
 
@@ -260,16 +297,8 @@ class PixelizationEditorCanvas(ZoomableImage):
         grid_rect = self._get_preview_grid_rect()
         if not grid_rect:
             return
-        x0, y0, nw, nh, cell_w = grid_rect
-        cell_h = cell_w
-        if min(cell_w, cell_h) < 3:
-            return
-        for i in range(1, self.grid_w):
-            x = x0 + i * cell_w
-            self.create_line(x, y0, x, y0 + nh, fill="#ffffff", width=1, tags="grid", stipple="gray50")
-        for j in range(1, self.grid_h):
-            y = y0 + j * cell_h
-            self.create_line(x0, y, x0 + nw, y, fill="#ffffff", width=1, tags="grid", stipple="gray50")
+        x0, y0, _, _, cell = grid_rect
+        self._draw_visible_grid(x0, y0, cell)
 
     def _draw_edit_grid(self):
         if not self.show_grid:
@@ -278,16 +307,24 @@ class PixelizationEditorCanvas(ZoomableImage):
         if not rect:
             return
         x0, y0, _, _ = rect
-        if self.zoom_factor < 3:
+        self._draw_visible_grid(x0, y0, self.zoom_factor)
+
+    def _draw_visible_grid(self, x0, y0, cell):
+        if cell < 3:
             return
-        for i in range(1, self.grid_w):
-            x = x0 + i * self.zoom_factor
-            self.create_line(x, y0, x, y0 + self.grid_h * self.zoom_factor,
-                             fill="#ffffff", width=1, tags="grid", stipple="gray50")
-        for j in range(1, self.grid_h):
-            y = y0 + j * self.zoom_factor
-            self.create_line(x0, y, x0 + self.grid_w * self.zoom_factor, y,
-                             fill="#ffffff", width=1, tags="grid", stipple="gray50")
+        cw, ch = self.winfo_width(), self.winfo_height()
+        left, top = max(0, x0), max(0, y0)
+        right, bottom = min(cw, x0 + self.grid_w * cell), min(ch, y0 + self.grid_h * cell)
+        if right < left or bottom < top:
+            return
+        first_col, last_col = max(1, math.ceil(-x0 / cell)), min(self.grid_w - 1, math.floor((cw - x0) / cell))
+        first_row, last_row = max(1, math.ceil(-y0 / cell)), min(self.grid_h - 1, math.floor((ch - y0) / cell))
+        for i in range(first_col, last_col + 1):
+            x = x0 + i * cell
+            self.create_line(x, top, x, bottom, fill="#ffffff", width=1, tags="grid", stipple="gray50")
+        for j in range(first_row, last_row + 1):
+            y = y0 + j * cell
+            self.create_line(left, y, right, y, fill="#ffffff", width=1, tags="grid", stipple="gray50")
 
     def _draw_highlight(self):
         if self.highlight_cell is None:
@@ -373,7 +410,7 @@ class PixelizationEditorCanvas(ZoomableImage):
 
     def _on_left_down(self, event):
         if self.mode == "preview":
-            if self.tool == "picker":
+            if self.tool == "picker" and not self._shift_down(event):
                 self._pick_color_at_canvas(event.x, event.y)
                 self.update_view()
                 return
@@ -400,6 +437,8 @@ class PixelizationEditorCanvas(ZoomableImage):
 
     def _on_left_drag(self, event):
         if self.mode == "preview":
+            if self.tool == "picker" and not self._shift_down(event) and self._last_pan_event is None:
+                return
             self.pan(event)
             return
         if not self._drawing_active:
@@ -440,7 +479,8 @@ class PixelizationEditorCanvas(ZoomableImage):
         cell = self._canvas_to_cell(event.x, event.y)
         if cell != self.highlight_cell:
             self.highlight_cell = cell
-            self.update_view()
+            self.delete('highlight')
+            self._draw_highlight()
 
     def _apply_brush(self, cell: Tuple[int, int]):
         i0, j0 = cell

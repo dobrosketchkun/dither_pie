@@ -142,6 +142,76 @@ class ModernGUITests(unittest.TestCase):
         self.assertEqual(app.pixelized_image.getpixel((1, 0))[3], 0)
         self.assertEqual(app.pixelization_cache['method'], 'editor')
 
+    def test_editor_shift_drag_bindings_move_image_and_grid_without_jumping(self):
+        source = Image.new('RGB', (128, 128), (40, 80, 120))
+        for editor_type in (PixelizationEditorDialog, ModernPixelizationEditor):
+            dialog = editor_type(self.app, source, config=self.config)
+            self.pump(.3)
+            canvas = dialog.canvas
+            for zoom in (1, 30):
+                for tool in ('brush', 'picker'):
+                    for button, mask in ((1, 0x100), (3, 0x400)):
+                        with self.subTest(editor=editor_type.__name__, zoom=zoom, tool=tool, button=button):
+                            canvas.zoom_factor = zoom
+                            canvas.preview_grid_scale = 5
+                            canvas.offset_x, canvas.offset_y = -20.25, 17.5
+                            canvas.preview_grid_offset_x, canvas.preview_grid_offset_y = 47.25, -16.5
+                            canvas.pan_start_x = canvas.pan_start_y = -9999
+                            canvas._last_pan_event = None
+                            canvas._auto_fit_on_resize = False
+                            canvas.tool = tool
+                            canvas.update_view()
+                            before_image = canvas._get_image_draw_rect()
+                            before_grid = canvas._get_preview_grid_rect()
+                            canvas.event_generate(f'<ButtonPress-{button}>', x=200, y=150, state=1)
+                            canvas.event_generate(f'<B{button}-Motion>', x=220, y=163, state=1 | mask)
+                            canvas.event_generate(f'<ButtonRelease-{button}>', x=220, y=163, state=1)
+                            self.pump(.02)
+                            after_image = canvas._get_image_draw_rect()
+                            after_grid = canvas._get_preview_grid_rect()
+                            self.assertEqual(after_image[0] - before_image[0], 20)
+                            self.assertEqual(after_image[1] - before_image[1], 13)
+                            self.assertEqual(after_grid[0] - before_grid[0], 20)
+                            self.assertEqual(after_grid[1] - before_grid[1], 13)
+                            self.assertIsNone(canvas._last_pan_event)
+            dialog._on_cancel()
+            self.pump(.05)
+
+    def test_editor_high_zoom_keeps_raster_and_grid_within_viewport(self):
+        source = Image.new('RGBA', (1024, 1024), (40, 80, 120, 255))
+        for editor_type in (PixelizationEditorDialog, ModernPixelizationEditor):
+            with self.subTest(editor=editor_type.__name__):
+                dialog = editor_type(self.app, source, config=self.config)
+                self.pump(.2)
+                canvas = dialog.canvas
+                canvas.zoom_factor = 30
+                canvas.preview_grid_scale = 10
+                canvas._auto_fit_on_resize = False
+                canvas.update_view()
+                self.assertLessEqual(canvas.displayed_image.width(), canvas.winfo_width() + 1)
+                self.assertLessEqual(canvas.displayed_image.height(), canvas.winfo_height() + 1)
+                self.assertLess(len(canvas.find_withtag('grid')), 100)
+                dialog.grid_w = dialog.grid_h = 64
+                canvas.set_grid(64, 64)
+                dialog._conversion_done([[(40, 80, 120)] * 64 for _ in range(64)], None)
+                canvas.zoom_factor = 30
+                canvas.update_view()
+                photo = canvas.displayed_image
+                from types import SimpleNamespace
+                event = SimpleNamespace(x=canvas.winfo_width() // 2, y=canvas.winfo_height() // 2)
+                canvas._on_motion(event)
+                self.assertIs(canvas.displayed_image, photo, 'Hover must not resample the image')
+                canvas.set_draw_color((1, 2, 3))
+                canvas.set_tool('brush')
+                cell = canvas._canvas_to_cell(event.x, event.y)
+                canvas._on_left_down(event)
+                canvas._on_left_up(event)
+                self.assertEqual(canvas.pixel_colors[cell[1]][cell[0]], (1, 2, 3))
+                canvas.undo()
+                self.assertEqual(canvas.pixel_colors[cell[1]][cell[0]], (40, 80, 120))
+                dialog._on_cancel()
+                self.pump(.05)
+
     def test_editor_conversion_runs_off_ui_and_closes_safely(self):
         from threading import get_ident
         from ui.pixelization_editor import sample_editor_grid

@@ -98,10 +98,11 @@ def validate_config(config: Dict[str, Any], config_path: Path, skip_input_check:
         if not isinstance(snap, dict):
             errors.append("'pixelization.snapper' must be an object/dictionary")
         else:
-            snap.setdefault('num_colors', 16)
+            snap.setdefault('num_colors', None)
             snap.setdefault('quantizer', 'median_cut')
             snap.setdefault('pixel_size', None)
-            _normalize_integer(snap, 'num_colors', 'pixelization.snapper.num_colors', 1, errors)
+            if snap['num_colors'] is not None:
+                _normalize_integer(snap, 'num_colors', 'pixelization.snapper.num_colors', 1, errors)
             try:
                 if isinstance(snap['pixel_size'], bool):
                     raise ValueError('Pixel size must be numeric, not boolean.')

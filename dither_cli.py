@@ -576,7 +576,9 @@ def generate_output_filename(input_path: Path, config: Dict[str, Any]) -> Path:
             snap = config['pixelization'].get('snapper', {})
             cell = snap.get('pixel_size')
             size = 'auto' if cell is None else f'{cell:g}px'
-            parts.append(f"snap_{size}_{snap.get('num_colors', 16)}c_{snap.get('quantizer', 'median_cut')}")
+            count = snap.get('num_colors')
+            colors = 'auto-colors' if count is None else f'{count}c'
+            parts.append(f"snap_{size}_{colors}_{snap.get('quantizer', 'median_cut')}")
         elif method != PixelizeMethod.NONE.value:
             parts.append(f"pix{config['pixelization']['max_size']}")
     

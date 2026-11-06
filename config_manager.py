@@ -76,7 +76,8 @@ class ConfigManager:
         },
 
         "pixel_snapper": {
-            "num_colors": 16,
+            "auto_colors": True,
+            "num_colors": None,
             "quantizer": "median_cut",
             "pixel_size": None,
         },

@@ -140,7 +140,7 @@ Open **Pixel Snapper…** from the modern **Pixelize** tab or the legacy sidebar
 It opens its own settings and comparison dialog.
 
 1. Use automatic grid detection, or enter a source cell size in pixels (fractional sizes are supported).
-2. Choose a color count from 1–256 and a reduction algorithm: Median Cut, K-means, or Octree.
+2. Use **Auto color count**, or enter a manual count from 1–256. Choose Median Cut, K-means, or Octree for reduction when needed.
 3. Click **Update preview** to compare the source with the snapped result. Zoom and pan are synchronized and retained when updating the preview.
 4. Click **Apply** to return the result to the main window. Settings changes require a fresh preview before applying; Cancel leaves the main image untouched.
 
@@ -149,6 +149,18 @@ and resets take effect in the image only when you click **Update preview**.
 **Apply** is disabled until that preview is current.
 Changing the color-reduction algorithm or color
 count clears palette edits; **Reset** also restores the generated palette.
+Auto preserves every exact source color when the visible image has up to 256
+colors. This avoids reducing the palette of clean, enlarged pixel art. For
+sources with more colors (including JPEG/compression noise), Auto estimates a
+count from a bounded sample and reports it as an estimate. It cannot guarantee
+recovery of a palette that was changed by compression. Auto starts enabled,
+including for older settings that only saved a manual count. Choosing manual
+mode and applying it remembers that choice for later sessions.
+For compressed, enlarged pixel art with a strongly aligned regular grid,
+Auto recovers colors from block interiors and merges only small RGB variations.
+This retains small accents that can be lost in a palette chosen mainly for
+large background areas. The preview labels this as approximate block-color
+recovery; uncertain or uneven grids continue through the general snapping path.
 Use **+** to add a color and **−** to delete the selected swatch (at least one
 color remains). The color dialog includes HSV/RGB/HEX controls and **Pick from
 image**: click either preview to sample its actual image color, then confirm

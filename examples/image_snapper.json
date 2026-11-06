@@ -6,7 +6,7 @@
     "method": "snapper",
     "snapper": {
       "pixel_size": null,
-      "num_colors": 16,
+      "num_colors": null,
       "quantizer": "median_cut"
     }
   },

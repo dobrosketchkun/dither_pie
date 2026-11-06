@@ -20,9 +20,44 @@ from utils import PaletteManager
 
 
 class SnapperGUITests(unittest.TestCase):
+    def test_auto_color_count_and_manual_override_wait_for_update(self):
+        def scenario(app, modern, errors):
+            # Older preferences stored only a manual count. It must no longer
+            # override the new default; retain it in the manual field instead.
+            app.config.set('pixel_snapper', 'num_colors', value=32)
+            dialog_type = ModernPixelSnapperDialog if modern else PixelSnapperDialog
+            dialog = dialog_type(app, app.current_image, config=app.config)
+            self.finish_dialog(app, dialog)
+            self.assertTrue(dialog.auto_colors_var.get())
+            self.assertEqual(dialog.count_var.get(), '32')
+            self.assertEqual(dialog.count_entry.cget('state'), 'disabled')
+            self.assertIn('Preserved all 2', dialog.status.cget('text'))
+            before = dialog.result_view.original_image.tobytes()
+            dialog.auto_colors_var.set(False)
+            dialog.count_var.set('1')
+            self.assertEqual(dialog.count_entry.cget('state'), 'normal')
+            self.assertIsNone(dialog.preview_result)
+            self.assertFalse(dialog._jobs._running)
+            self.assertEqual(dialog.result_view.original_image.tobytes(), before)
+            dialog._preview()
+            self.finish_dialog(app, dialog)
+            self.assertEqual(len(dialog.palette_colors), 1)
+            dialog.auto_colors_var.set(True)
+            self.assertIsNone(dialog.preview_result)
+            dialog._preview()
+            self.finish_dialog(app, dialog)
+            self.assertEqual(dialog.preview_result.image.tobytes(), before)
+            dialog._apply()
+            self.assertIsNone(app.config.get('pixel_snapper', 'num_colors'))
+            self.assertTrue(app.config.get('pixel_snapper', 'auto_colors'))
+        for modern in (False, True):
+            with self.subTest(modern=modern):
+                self.run_design(modern, scenario)
+
     def test_add_delete_and_image_picker_in_both_designs(self):
         def scenario(app, modern, errors):
             app.config.set('pixel_snapper', 'num_colors', value=1)
+            app.config.set('pixel_snapper', 'auto_colors', value=False)
             dialog_type = ModernPixelSnapperDialog if modern else PixelSnapperDialog
             dialog = dialog_type(app, app.current_image, config=app.config)
             self.finish_dialog(app, dialog)
@@ -243,6 +278,7 @@ class SnapperGUITests(unittest.TestCase):
         def scenario(app, modern, errors):
             dialog_type = ModernPixelSnapperDialog if modern else PixelSnapperDialog
             dialog = dialog_type(app, app.current_image, config=app.config)
+            dialog.auto_colors_var.set(False)
             dialog.count_var.set('0')
             dialog._preview()
             self.assertEqual(dialog.apply_button.cget('state'), 'disabled')

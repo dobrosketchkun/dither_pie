@@ -19,12 +19,12 @@ QUANTIZERS = ('median_cut', 'kmeans', 'octree')
 
 @dataclass(frozen=True)
 class SnapSettings:
-    num_colors: int = 16
+    num_colors: int | None = None
     quantizer: str = 'median_cut'
     pixel_size: float | None = None
 
     def __post_init__(self):
-        if isinstance(self.num_colors, bool) or not isinstance(self.num_colors, int) or not 1 <= self.num_colors <= 256:
+        if self.num_colors is not None and (isinstance(self.num_colors, bool) or not isinstance(self.num_colors, int) or not 1 <= self.num_colors <= 256):
             raise ValueError('Color count must be an integer from 1 to 256.')
         if self.quantizer not in QUANTIZERS:
             raise ValueError(f'Unknown color reduction algorithm: {self.quantizer}')
@@ -43,6 +43,39 @@ class SnapResult:
     automatic: bool
     warning: str = ''
     palette: tuple = ()
+    color_note: str = ''
+
+
+def _estimate_color_count(sample):
+    """Find a compact count with low RGB error on a bounded analysis sample.
+
+    This is a fidelity heuristic for high-color/noisy sources, not a claim to
+    recover the original palette size from a compressed image.
+    """
+    strip = Image.fromarray(sample.reshape(1, -1, 3), 'RGB')
+    for count in (4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256):
+        indexed = strip.quantize(colors=count, method=Image.Quantize.MEDIANCUT, dither=Image.Dither.NONE)
+        error = np.asarray(strip, dtype=np.float32) - np.asarray(indexed.convert('RGB'), dtype=np.float32)
+        distances = np.sqrt(np.sum(error * error, axis=2))
+        if np.sqrt(np.mean(error * error)) <= 3 and np.percentile(distances, 95) <= 12:
+            return count
+    return 256
+
+
+def _build_palette(sample, count, quantizer):
+    if quantizer == 'kmeans':
+        from sklearn.cluster import KMeans
+        from threadpoolctl import threadpool_limits
+        count = min(count, len(np.unique(sample, axis=0)))
+        with threadpool_limits(limits=1):
+            model = KMeans(n_clusters=count, random_state=42, n_init=3).fit(sample.astype(np.float32))
+        return np.rint(model.cluster_centers_).clip(0, 255).astype(np.uint8)
+    strip = Image.fromarray(sample.reshape(1, -1, 3), 'RGB')
+    method = Image.Quantize.MEDIANCUT if quantizer == 'median_cut' else Image.Quantize.FASTOCTREE
+    indexed = strip.quantize(colors=count, method=method, dither=Image.Dither.NONE)
+    used = sorted(indexed.getcolors(), key=lambda item: item[1])
+    raw = np.asarray(indexed.getpalette(), dtype=np.uint8).reshape(-1, 3)
+    return raw[[index for _, index in used]]
 
 
 def _quantize(rgba, settings):
@@ -51,30 +84,30 @@ def _quantize(rgba, settings):
     result[~visible] = 0
     pixels = rgba[..., :3][visible]
     if not len(pixels):
-        return result, ()
+        return result, (), 'No visible colors', 0
     # Only visible colors participate. Padding repeats visible samples, never
     # hidden RGB, and the bounded sample keeps large images practical.
     unique = np.unique(pixels, axis=0)
-    count = min(settings.num_colors, len(unique))
+    automatic = settings.num_colors is None
+    count = min(settings.num_colors or 256, len(unique))
     if count == len(unique):
-        return result, tuple(map(tuple, unique.tolist()))
+        note = f'Preserved all {count} source colors' if automatic else ''
+        return result, tuple(map(tuple, unique.tolist())), note, len(unique)
     rng = np.random.default_rng(42)
     sample = pixels if len(pixels) <= 32768 else pixels[rng.choice(len(pixels), 32768, replace=False)]
-    if settings.quantizer == 'kmeans':
-        from sklearn.cluster import KMeans
-        from threadpoolctl import threadpool_limits
-        count = min(count, len(np.unique(sample, axis=0)))
-        with threadpool_limits(limits=1):
-            model = KMeans(n_clusters=count, random_state=42, n_init=3).fit(sample.astype(np.float32))
-        palette = np.rint(model.cluster_centers_).clip(0, 255).astype(np.uint8)
-    else:
-        strip = Image.fromarray(sample.reshape(1, -1, 3), 'RGB')
-        method = Image.Quantize.MEDIANCUT if settings.quantizer == 'median_cut' else Image.Quantize.FASTOCTREE
-        indexed = strip.quantize(colors=count, method=method, dither=Image.Dither.NONE)
-        used = sorted(indexed.getcolors(), key=lambda item: item[1])
-        raw = np.asarray(indexed.getpalette(), dtype=np.uint8).reshape(-1, 3)
-        palette = raw[[index for _, index in used]]
-    tree = cKDTree(palette.astype(np.float32))
+    if automatic:
+        count = _estimate_color_count(sample)
+    while True:
+        palette = _build_palette(sample, count, settings.quantizer)
+        tree = cKDTree(palette.astype(np.float32))
+        if not automatic or count == 256:
+            break
+        # Check the selected algorithm as well: Octree and K-means do not
+        # produce the same error as the Median Cut estimate at a given count.
+        distances, _ = tree.query(sample)
+        if np.sqrt(np.mean(distances * distances) / 3) <= 3 and np.percentile(distances, 95) <= 12:
+            break
+        count = next(c for c in (4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256) if c > count)
     # Bound the query workspace independently of image dimensions.
     mapped = np.empty_like(pixels)
     for start in range(0, len(pixels), 262144):
@@ -82,7 +115,8 @@ def _quantize(rgba, settings):
         _, indices = tree.query(chunk)
         mapped[start:start + len(chunk)] = palette[indices]
     result[..., :3][visible] = mapped
-    return result, tuple(map(tuple, palette.tolist()))
+    note = f'Estimated {len(palette)} colors (source has more than 256)' if automatic else ''
+    return result, tuple(map(tuple, palette.tolist())), note, len(unique)
 
 
 def _edge_profiles(rgba):
@@ -150,6 +184,46 @@ def _sample_grid(rgba, cols, rows):
     return output
 
 
+def _recover_block_colors(rgba, cols, rows):
+    """Recover compressed enlarged pixel art only on a strong regular grid.
+
+    Cell interiors avoid JPEG edge ringing. A radius-limited palette merges
+    small color variations while retaining rare colors regardless of area.
+    Uncertain grids and palettes exceeding 256 colors use the general path.
+    """
+    widths, heights = np.diff(cols), np.diff(rows)
+    if (len(widths) < 2 or len(heights) < 2 or min(widths.min(), heights.min()) < 4 or
+            np.any(widths != widths[0]) or np.any(heights != heights[0])):
+        return None
+    px, py = _edge_profiles(rgba)
+    for profile, cuts in ((px, cols), (py, rows)):
+        total = float(profile.sum())
+        if total == 0 or profile[np.asarray(cuts[1:-1])].sum() / total < .65:
+            return None
+    sx, sy = int(widths[0]), int(heights[0])
+    cells = rgba.reshape(len(heights), sy, len(widths), sx, 4).transpose(0, 2, 1, 3, 4)
+    core = cells[:, :, sy // 4:sy - sy // 4, sx // 4:sx - sx // 4]
+    output = np.rint(np.median(core, axis=(2, 3))).astype(np.uint8)
+    visible = output[..., 3] > 0
+    output[~visible] = 0
+    colors, counts = np.unique(output[..., :3][visible], axis=0, return_counts=True)
+    if not len(colors):
+        return None
+    palette = []
+    # No frequency cutoff: a single-pixel eye highlight has the same maximum
+    # allowed color error as a large background. Centers are observed colors.
+    for index in np.argsort(-counts, kind='stable'):
+        color = colors[index].astype(np.float32)
+        if not palette or np.min(np.sum((np.asarray(palette) - color) ** 2, axis=1)) > 6 ** 2:
+            palette.append(color)
+            if len(palette) > 256:
+                return None
+    _, indices = cKDTree(palette).query(output[..., :3][visible])
+    output[..., :3][visible] = np.asarray(palette, dtype=np.uint8)[indices]
+    colors = tuple(tuple(int(v) for v in color) for color in palette)
+    return output, colors, f'Recovered approximately {len(colors)} block colors (compression cleanup)'
+
+
 def apply_snap_palette(source, base, palette, *, custom=False):
     """Recolor a cached grid without regenerating its palette or boundaries.
 
@@ -185,7 +259,7 @@ def apply_snap_palette(source, base, palette, *, custom=False):
     if np.all(output[..., 3] == 255):
         image = image.convert('RGB')
     return SnapResult(image, base.pixel_size, base.columns, base.rows, base.automatic,
-                      base.warning, tuple(map(tuple, palette)))
+                      base.warning, tuple(map(tuple, palette)), f'Edited palette: {len(palette)} colors')
 
 
 def snap_pixels(image: Image.Image, settings: SnapSettings | None = None, *, palette=None) -> SnapResult:
@@ -201,12 +275,8 @@ def snap_pixels(image: Image.Image, settings: SnapSettings | None = None, *, pal
         raise ValueError('Image dimensions must be positive.')
     if settings.pixel_size is not None and settings.pixel_size > min(width, height):
         raise ValueError('Pixel size cannot exceed the shorter image edge.')
-    rgba, generated_palette = _quantize(np.asarray(image.convert('RGBA')), settings)
-    if palette is not None:
-        if (len(palette) != len(generated_palette) or
-                any(len(color) != 3 or any(isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= 255
-                                           for v in color) for color in palette)):
-            raise ValueError('An edited palette must contain one RGB color per generated palette entry.')
+    source_rgba = np.asarray(image.convert('RGBA'))
+    rgba, generated_palette, color_note, source_colors = _quantize(source_rgba, settings)
     px, py = _edge_profiles(rgba)
     automatic = settings.pixel_size is None
     warning = ''
@@ -225,7 +295,17 @@ def snap_pixels(image: Image.Image, settings: SnapSettings | None = None, *, pal
     else:
         step = float(settings.pixel_size)
     cols, rows = _walk(px, step), _walk(py, step)
-    output = _sample_grid(rgba, cols, rows)
+    recovered = (_recover_block_colors(source_rgba, cols, rows)
+                 if settings.num_colors is None and source_colors > 256 else None)
+    if recovered is not None:
+        output, generated_palette, color_note = recovered
+    else:
+        output = _sample_grid(rgba, cols, rows)
+    if palette is not None:
+        if (len(palette) != len(generated_palette) or
+                any(len(color) != 3 or any(isinstance(v, bool) or not isinstance(v, int) or not 0 <= v <= 255
+                                           for v in color) for color in palette)):
+            raise ValueError('An edited palette must contain one RGB color per generated palette entry.')
     if palette is not None and generated_palette:
         # Editing a swatch recolors its existing cluster. Do not reassign pixels
         # to a different cluster or move the detected grid as colors are edited.
@@ -236,4 +316,5 @@ def snap_pixels(image: Image.Image, settings: SnapSettings | None = None, *, pal
     if np.all(output[..., 3] == 255):
         result = result.convert('RGB')
     return SnapResult(result, float(step), cols, rows, automatic, warning,
-                      generated_palette if palette is None else tuple(map(tuple, palette)))
+                      generated_palette if palette is None else tuple(map(tuple, palette)),
+                      color_note if palette is None else f'Edited palette: {len(palette)} colors')

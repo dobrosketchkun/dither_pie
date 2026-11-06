@@ -27,11 +27,14 @@ class SnapperContents:
         self._selected_color = 0
         self._color_picker = None
         preferences = config.get('pixel_snapper', default={}) if config else {}
+        preferences = dict(preferences) if isinstance(preferences, dict) else {}
+        auto_colors = preferences.pop('auto_colors', True)
         try:
             settings = SnapSettings(**preferences)
         except (TypeError, ValueError):
             settings = SnapSettings()
-        self.count_var = tk.StringVar(self, str(settings.num_colors))
+        self.count_var = tk.StringVar(self, str(settings.num_colors or 16))
+        self.auto_colors_var = tk.BooleanVar(self, auto_colors)
         name = next(name for name, value in ALGORITHMS.items() if value == settings.quantizer)
         self.algorithm_var = tk.StringVar(self, name)
         self.auto_var = tk.BooleanVar(self, settings.pixel_size is None)
@@ -40,6 +43,7 @@ class SnapperContents:
         for variable in (self.auto_var, self.size_var):
             variable.trace_add('write', self._settings_changed)
         self.count_var.trace_add('write', self._palette_settings_changed)
+        self.auto_colors_var.trace_add('write', self._palette_settings_changed)
         self.algorithm_var.trace_add('write', self._reduction_changed)
         self.protocol('WM_DELETE_WINDOW', self.close)
         self.bind('<Escape>', self._escape)
@@ -61,15 +65,18 @@ class SnapperContents:
         ctk.CTkLabel(settings, text='Source cell size (px)').grid(row=2, column=0, sticky='w', padx=12)
         self.size_entry = ctk.CTkEntry(settings, textvariable=self.size_var)
         self.size_entry.grid(row=3, column=0, sticky='ew', padx=12, pady=(0, 12))
-        ctk.CTkLabel(settings, text='Generated colors (1–256)').grid(row=4, column=0, sticky='w', padx=12)
-        ctk.CTkEntry(settings, textvariable=self.count_var).grid(row=5, column=0, sticky='ew', padx=12)
-        ctk.CTkLabel(settings, text='Color reduction').grid(row=6, column=0, sticky='w', padx=12, pady=(12, 0))
+        self.auto_colors_check = ctk.CTkCheckBox(settings, text='Auto color count', variable=self.auto_colors_var)
+        self.auto_colors_check.grid(row=4, column=0, sticky='w', padx=12, pady=(0, 8))
+        ctk.CTkLabel(settings, text='Manual colors (1–256)').grid(row=5, column=0, sticky='w', padx=12)
+        self.count_entry = ctk.CTkEntry(settings, textvariable=self.count_var)
+        self.count_entry.grid(row=6, column=0, sticky='ew', padx=12)
+        ctk.CTkLabel(settings, text='Color reduction').grid(row=7, column=0, sticky='w', padx=12, pady=(12, 0))
         self.algorithm_menu = ctk.CTkOptionMenu(settings, values=list(ALGORITHMS), variable=self.algorithm_var)
-        self.algorithm_menu.grid(row=7, column=0, sticky='ew', padx=12)
+        self.algorithm_menu.grid(row=8, column=0, sticky='ew', padx=12)
         self.preview_button = ctk.CTkButton(settings, text='Update preview', command=self._preview)
-        self.preview_button.grid(row=8, column=0, sticky='ew', padx=12, pady=16)
+        self.preview_button.grid(row=9, column=0, sticky='ew', padx=12, pady=16)
         palette_head = ctk.CTkFrame(settings, fg_color='transparent')
-        palette_head.grid(row=9, column=0, sticky='ew', padx=12)
+        palette_head.grid(row=10, column=0, sticky='ew', padx=12)
         self.palette_label = ctk.CTkLabel(palette_head, text='Palette')
         self.palette_label.pack(side='left')
         self.reset_palette_button = ctk.CTkButton(palette_head, text='Reset', width=55,
@@ -79,9 +86,9 @@ class SnapperContents:
         self.delete_color_button.pack(side='right', padx=(2, 4))
         self.add_color_button = ctk.CTkButton(palette_head, text='+', width=28, command=self._add_color)
         self.add_color_button.pack(side='right', padx=2)
-        settings.grid_rowconfigure(10, weight=1)
+        settings.grid_rowconfigure(11, weight=1)
         self.palette_frame = ctk.CTkScrollableFrame(settings, width=190, height=150)
-        self.palette_frame.grid(row=10, column=0, sticky='nsew', padx=12, pady=(6, 12))
+        self.palette_frame.grid(row=11, column=0, sticky='nsew', padx=12, pady=(6, 12))
         views = ctk.CTkFrame(self.body, fg_color='transparent')
         views.grid(row=0, column=1, sticky='nsew')
         views.grid_columnconfigure((0, 1), weight=1, uniform='preview')
@@ -104,7 +111,7 @@ class SnapperContents:
 
     def _read_settings(self):
         try:
-            count = int(self.count_var.get())
+            count = None if self.auto_colors_var.get() else int(self.count_var.get())
             size = None if self.auto_var.get() else float(self.size_var.get())
         except ValueError:
             raise ValueError('Enter an integer color count and a numeric pixel size.') from None
@@ -118,9 +125,11 @@ class SnapperContents:
         self.add_color_button.configure(state='normal' if self._base_preview and len(self.palette_colors) < 256 else 'disabled')
         self.delete_color_button.configure(state='normal' if len(self.palette_colors) > 1 else 'disabled')
         self.size_entry.configure(state='disabled' if self.auto_var.get() else 'normal')
+        self.count_entry.configure(state='disabled' if self.auto_colors_var.get() else 'normal')
         self.status.configure(text='Settings changed. Update preview to apply.')
 
     def _palette_settings_changed(self, *_):
+        self.auto_colors_check.configure(text='Auto color count')
         self._edited_palette = None
         self._palette_custom = False
         self._base_preview = None
@@ -221,9 +230,13 @@ class SnapperContents:
             self.result_view.set_image(result.image)
             self.palette_colors = list(result.palette)
             self._show_palette()
+            if self.auto_colors_var.get():
+                self.auto_colors_check.configure(text=f'Auto color count ({len(base.palette)})')
             text = f'{result.image.width} × {result.image.height} pixels · source cell ≈ {result.pixel_size:g}px'
             if result.warning:
                 text += '\n' + result.warning
+            if result.color_note:
+                text += '\n' + result.color_note
             self.status.configure(text=text)
             self.apply_button.configure(state='normal')
             self.add_color_button.configure(state='normal' if len(self.palette_colors) < 256 else 'disabled')
@@ -279,6 +292,7 @@ class SnapperContents:
         self.result = self.preview_result
         self.result_image = self.result.image
         if self.config_mgr:
+            self.config_mgr.set('pixel_snapper', 'auto_colors', value=self.auto_colors_var.get())
             for key in ('num_colors', 'quantizer', 'pixel_size'):
                 self.config_mgr.set('pixel_snapper', key, value=getattr(self._preview_settings, key))
             self.config_mgr.save()

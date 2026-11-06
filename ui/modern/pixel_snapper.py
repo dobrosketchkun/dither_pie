@@ -15,5 +15,6 @@ class ModernPixelSnapperDialog(SnapperContents, Dialog):
         self.algorithm_menu.configure(fg_color=T.c('card_alt'), button_color=T.c('card_hi'),
                                       button_hover_color=T.c('border'), text_color=T.c('text'))
         self.auto_check.configure(fg_color=T.accent(), hover_color=T.accent_hover(), checkmark_color=T.accent_on())
+        self.auto_colors_check.configure(fg_color=T.accent(), hover_color=T.accent_hover(), checkmark_color=T.accent_on())
         for button in (self.reset_palette_button, self.fit_button, self.add_color_button, self.delete_color_button):
             button.configure(fg_color=T.c('card_alt'), hover_color=T.c('card_hi'), text_color=T.c('text'))

@@ -1,5 +1,6 @@
 """Grid recovery, color reduction, alpha, and image-job integration."""
 from pathlib import Path
+from io import BytesIO
 import logging
 import tempfile
 import unittest
@@ -19,6 +20,64 @@ def enlarged_sprite(widths=(4,) * 7, heights=(4,) * 5):
 
 
 class SnapperTests(unittest.TestCase):
+    def test_compressed_upscaled_art_recovers_rare_block_colors(self):
+        # A tiny face/eye accent occupies very little area compared with the
+        # background. A global average-error palette can erase it cheaply.
+        rng = np.random.default_rng(12)
+        native = np.full((48, 48, 3), (110, 130, 95), dtype=np.uint8)
+        palette = np.array([[244, 238, 219], [242, 198, 198], [168, 125, 147],
+                            [80, 77, 104], [200, 119, 98], [36, 43, 62]], dtype=np.uint8)
+        native[12:32, 14:34] = palette[rng.integers(0, len(palette), (20, 20))]
+        native[20, 22] = (74, 127, 177)
+        encoded = BytesIO()
+        Image.fromarray(native).resize((384, 384), Image.Resampling.NEAREST).save(
+            encoded, format='JPEG', quality=85)
+        encoded.seek(0)
+        source = Image.open(encoded).convert('RGB')
+        self.assertGreater(len(np.unique(np.asarray(source).reshape(-1, 3), axis=0)), 256)
+        result = snap_pixels(source, SnapSettings(None, 'octree', 8))
+        self.assertIn('Recovered approximately', result.color_note)
+        self.assertEqual(result.image.size, (48, 48))
+        cells = np.asarray(source).reshape(48, 8, 48, 8, 3).transpose(0, 2, 1, 3, 4)
+        reference = np.rint(np.median(cells[:, :, 2:6, 2:6], axis=(2, 3)))
+        distance = np.sqrt(np.sum((np.asarray(result.image).astype(float) - reference) ** 2, axis=2))
+        self.assertLessEqual(float(distance.max()), 6)
+        self.assertLessEqual(float(np.linalg.norm(np.array(result.image.getpixel((22, 20))) - native[20, 22].astype(float))), 8)
+        self.assertLessEqual(len(result.palette), 256)
+
+    def test_auto_color_count_preserves_a_clean_upscaled_palette_exactly(self):
+        data = np.random.default_rng(8).integers(0, 256, (7, 9, 3), dtype=np.uint8)
+        source = Image.fromarray(data).resize((36, 28), Image.Resampling.NEAREST)
+        for algorithm in ('median_cut', 'kmeans', 'octree'):
+            result = snap_pixels(source, SnapSettings(None, algorithm, 4))
+            self.assertEqual(result.image.tobytes(), data.tobytes())
+            self.assertEqual(len(result.palette), 63)
+            self.assertIn('Preserved all 63', result.color_note)
+
+    def test_auto_color_count_ignores_hidden_colors(self):
+        data = np.random.default_rng(9).integers(0, 256, (20, 20, 4), dtype=np.uint8)
+        data[..., 3] = 0
+        data[:4, :4] = (12, 60, 130, 255)
+        result = snap_pixels(Image.fromarray(data), SnapSettings(pixel_size=1))
+        self.assertEqual(result.palette, ((12, 60, 130),))
+
+    def test_noisy_source_uses_deterministic_estimate_and_retains_alpha(self):
+        rng = np.random.default_rng(10)
+        palette = np.array([[30, 70, 110], [210, 140, 80], [130, 40, 70], [60, 170, 120]])
+        data = palette[np.indices((40, 40)).sum(axis=0) % 4]
+        data = np.clip(data + rng.integers(-3, 4, data.shape), 0, 255).astype(np.uint8)
+        rgba = np.dstack((data, np.full((40, 40), 128, dtype=np.uint8)))
+        settings = SnapSettings(pixel_size=1)
+        first = snap_pixels(Image.fromarray(rgba), settings)
+        second = snap_pixels(Image.fromarray(rgba), settings)
+        self.assertLessEqual(len(first.palette), 16)
+        self.assertIn('Estimated', first.color_note)
+        self.assertEqual(first.image.tobytes(), second.image.tobytes())
+        self.assertEqual(first.image.getchannel('A').getextrema(), (128, 128))
+        octree = snap_pixels(Image.fromarray(rgba), SnapSettings(None, 'octree', 1))
+        error = np.asarray(octree.image)[..., :3].astype(float) - data
+        self.assertLessEqual(float(np.sqrt(np.mean(error * error))), 3)
+
     def test_custom_palette_can_add_and_remove_colors_without_changing_grid(self):
         source, _ = enlarged_sprite()
         base = snap_pixels(source, SnapSettings(1, pixel_size=4))
@@ -159,6 +218,15 @@ class SnapperJobTests(unittest.TestCase):
             with self.subTest(settings=settings), self.assertRaises(ConfigValidationError):
                 validate_config({'pixelization': {'method': 'snapper', 'snapper': settings}},
                                 Path('job.json'), skip_input_check=True)
+
+    def test_null_job_color_count_is_automatic(self):
+        from processing_config import validate_config
+        from dither_cli import generate_output_filename
+        config = validate_config({'pixelization': {'method': 'snapper', 'enabled': True,
+                                                   'snapper': {'num_colors': None}}},
+                                 Path('job.json'), skip_input_check=True)
+        self.assertIsNone(config['pixelization']['snapper']['num_colors'])
+        self.assertIn('auto-colors', generate_output_filename(Path('in.png'), config).name)
 
     def test_video_rejected_instead_of_silently_skipping_snapper(self):
         from dither_cli import process_single_video

@@ -30,7 +30,8 @@ python ../dither_pie.py image_custom_palette.json
 
 ### `image_snapper.json`
 Recover a grid from uneven pixel art using automatic cell-size detection and
-16-color Median Cut reduction. Set `pixel_size` to a number for manual sizing,
+automatic color-count detection. Set `num_colors` to a number for manual reduction.
+Set `pixel_size` to a number for manual sizing,
 or change `quantizer` to `kmeans` or `octree`. Dithering is independently optional.
 
 ```bash

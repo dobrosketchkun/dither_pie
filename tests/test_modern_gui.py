@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import unittest
 import gc
+import sys
 from unittest.mock import patch
 
 from PIL import Image
@@ -62,6 +63,53 @@ class ModernGUITests(unittest.TestCase):
         self.app.load_image(str(path))
         self.finish()
         return image
+
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows custom chrome')
+    def test_titlebar_double_click_maximizes_and_restores_once(self):
+        from ui.modern.chrome import drag_targets
+        from ui.modern import winchrome
+        app = self.app
+        self.assertTrue(app._custom_chrome)
+        normal = winchrome.window_rect(app)
+        timestamp = 1000
+        for widget in (app.topbar, app.file_label, app.logo):
+            for target in drag_targets(widget):
+                with self.subTest(widget=str(target)), patch.object(app, 'toggle_maximize', wraps=app.toggle_maximize) as toggle:
+                    for expected in (True, False):
+                        for delta in (0, 100):
+                            target.event_generate('<ButtonPress-1>', x=10, y=10, time=timestamp + delta)
+                            target.event_generate('<ButtonRelease-1>', x=10, y=10, time=timestamp + delta + 10)
+                        timestamp += 1000
+                        self.pump()
+                        self.assertEqual(app._maximized, expected)
+                        if expected:
+                            x, y, w, h = winchrome.work_area(app)
+                            self.assertEqual(winchrome.window_rect(app), (x, y, x + w, y + h))
+                        else:
+                            self.assertEqual(winchrome.window_rect(app), normal)
+                    self.assertEqual(toggle.call_count, 2)
+
+    @unittest.skipUnless(sys.platform == 'win32', 'Windows icon')
+    def test_app_icon_survives_customtkinter_delayed_default(self):
+        import ctypes
+        from ctypes import wintypes
+        from ui.modern.winchrome import hwnd_of
+        from ui.app_icon import ICON_PATH
+        self.assertTrue(self.app._iconbitmap_method_called)
+        with Image.open(ICON_PATH) as image:
+            self.assertIn((16, 16), image.ico.sizes())
+            self.assertIn((256, 256), image.ico.sizes())
+        # Tk's iconbitmap getter returns an empty string for Windows ICO files.
+        # Check the actual native icons, including after CTk's default callback.
+        send = ctypes.PyDLL('user32').SendMessageW
+        send.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        send.restype = wintypes.HANDLE
+        hwnd = hwnd_of(self.app)
+        icons = tuple(send(hwnd, 0x7F, kind, 0) for kind in (0, 1))  # WM_GETICON
+        self.assertTrue(all(icons))
+        self.app._windows_set_titlebar_icon()
+        self.pump()
+        self.assertEqual(tuple(send(hwnd, 0x7F, kind, 0) for kind in (0, 1)), icons)
 
     def test_real_image_pixelize_dither_and_save(self):
         source = self.load()

@@ -11,6 +11,8 @@ from typing import List, Tuple, Optional, Dict, Any
 from PIL import Image
 from scipy.spatial import KDTree
 from scipy.ndimage import uniform_filter, distance_transform_edt
+from runtime_config import configure_windows_cpu_detection
+configure_windows_cpu_detection()
 from sklearn.cluster import KMeans
 import pywt  # For wavelet-based dithering if needed
 import heapq

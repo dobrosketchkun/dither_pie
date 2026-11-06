@@ -3,6 +3,7 @@ import tkinter as tk
 import customtkinter as ctk
 from . import theme as T, winchrome
 from .widgets import Icon, Label
+from ui.app_icon import BAYER_MARK
 
 def geometry_size(window):
     """Tk's own idea of the size. ``winfo_width`` can report a mid-layout
@@ -71,7 +72,7 @@ class RailButton(ctk.CTkFrame):
 class Logo(tk.Canvas):
     """The 4x4 Bayer matrix itself, thresholded across a ramp."""
 
-    MATRIX = ((0, 8, 2, 10), (12, 4, 14, 6), (3, 11, 1, 9), (15, 7, 13, 5))
+    MATRIX = BAYER_MARK
 
     def __init__(self, master, size=22):
         super().__init__(master, width=size, height=size, highlightthickness=0,
@@ -101,10 +102,12 @@ class WindowChrome:
         # a label wraps a real tk label. Events land on those, not on the
         # widget itself, and tkinter does not bubble to the parent.
         for target in drag_targets(widget):
-            target.bind("<Button-1>", self._drag_press, add="+")
-            target.bind("<B1-Motion>", self._drag_motion, add="+")
-            target.bind("<ButtonRelease-1>", self._drag_release, add="+")
-            target.bind("<Double-Button-1>", self._drag_double, add="+")
+            # CTk.bind forwards to its inner canvas/label. We already enumerate
+            # those surfaces, so bind through Tk to register each callback once.
+            tk.Misc.bind(target, "<Button-1>", self._drag_press, add="+")
+            tk.Misc.bind(target, "<B1-Motion>", self._drag_motion, add="+")
+            tk.Misc.bind(target, "<ButtonRelease-1>", self._drag_release, add="+")
+            tk.Misc.bind(target, "<Double-Button-1>", self._drag_double, add="+")
 
     def _drag_press(self, event):
         # Arm, do not drag yet: starting the native move loop on press would

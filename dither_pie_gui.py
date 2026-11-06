@@ -47,6 +47,7 @@ from utils import (
     split_alpha
 )
 from config_manager import ConfigManager
+from ui.app_icon import set_app_identity, set_app_icon
 
 __all__ = [
     'DitheringApp',
@@ -60,7 +61,9 @@ class DitheringApp(ctk.CTk):
     """
     
     def __init__(self):
+        set_app_identity()
         super().__init__()
+        set_app_icon(self)
         
         # Load configuration
         self.config = ConfigManager()

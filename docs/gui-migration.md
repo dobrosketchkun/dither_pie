@@ -10,6 +10,7 @@ Production must never import `_gui_preview`.
 | --- | --- | --- |
 | Source | Image decoding, real transparency detection, recent paths, video first/random frames | Source panel; real files, no generated scene or invented video metadata |
 | Pixelization | Shared nearest-neighbor implementation, even dimensions based on the **shorter** edge, optional neural model | Label the real size semantics; do not copy mockup's longest-edge resize |
+| Video Snapper | Clip-level fractional grid and palette, editable preview, optional dithering, MP4/GIF export | Reuse the analyzed plan in streaming export; never auto-detect each frame separately |
 | Neural | Lazy model loading; disallow transparent inputs | Preserve capability gating and surface errors |
 | Editor setup | Target grid, source pan/zoom, fit-to-grid, alpha cutoff, conversion | New styled controls in `ui.modern.editor`, backed by the production canvas and conversion lifecycle |
 | Editor tools | Brush strokes/interpolation, connected wand replacement, color picker, Alt picker, right-click/Shift pan, grid, undo/redo | Retain production canvas and shortcuts |

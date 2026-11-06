@@ -439,10 +439,13 @@ def process_single_video(config: Dict[str, Any], neural_pixelizer: Optional[Neur
 
         logger.info(f"Processing video: [cyan]{input_path.name}[/]")
 
+        snapper_plan = None
         if (config['pixelization']['enabled'] and
                 config['pixelization']['method'] == PixelizeMethod.SNAPPER.value):
-            logger.error('Pixel Snapper currently supports still images only; a stable video grid is required.')
-            return False
+            from pixel_snapper import SnapSettings
+            from video_snapper import analyze_video_snap
+            logger.info('Analyzing clip grid and shared palette...')
+            snapper_plan = analyze_video_snap(str(input_path), SnapSettings(**config['pixelization'].get('snapper', {})))
 
         # Get video info
         video_processor = VideoProcessor()
@@ -471,6 +474,11 @@ def process_single_video(config: Dict[str, Any], neural_pixelizer: Optional[Neur
                 subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
                 first_frame = Image.open(frame_path).convert('RGB')
 
+            if snapper_plan is not None:
+                if input_path.suffix.lower() == '.gif':
+                    from video_snapper import read_clip_frame
+                    first_frame = read_clip_frame(input_path, video_info)
+                first_frame = snapper_plan.render(first_frame)
             # Setup palette (returns palette and actual color count)
             palette, actual_num_colors = setup_palette_from_config(config["palette"], first_frame)
 
@@ -527,7 +535,8 @@ def process_single_video(config: Dict[str, Any], neural_pixelizer: Optional[Neur
                 str(output_path),
                 ditherer,
                 pixelize_func=pixelize_func,
-                final_resize_multiplier=final_resize_multiplier
+                final_resize_multiplier=final_resize_multiplier,
+                **({'snapper_plan': snapper_plan} if snapper_plan is not None else {})
             )
 
         if success:
@@ -644,6 +653,9 @@ def process_folder(config: Dict[str, Any]) -> bool:
         all_files = list(input_path.iterdir())
         image_files = [f for f in all_files if f.is_file() and f.suffix.lower() in image_exts]
         video_files = [f for f in all_files if f.is_file() and f.suffix.lower() in video_exts]
+        animated = [f for f in image_files if f.suffix.lower() == '.gif' and detect_mode(f) == 'video']
+        image_files = [f for f in image_files if f not in animated]
+        video_files.extend(animated)
         
         # Determine what to process
         process_images = len(image_files) > 0

@@ -1,0 +1,11 @@
+{
+  "input": "input.mp4",
+  "output": "snapped.mp4",
+  "pixelization": {
+    "enabled": true,
+    "method": "snapper",
+    "snapper": {"pixel_size": null, "num_colors": null, "quantizer": "median_cut"}
+  },
+  "dithering": {"enabled": false},
+  "final_resize": {"enabled": true, "multiplier": 4}
+}

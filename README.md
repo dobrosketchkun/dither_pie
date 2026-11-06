@@ -18,7 +18,7 @@ A Python application for dithering and pixelizing images and videos, with a desk
 ### Pixelization Methods
 - **Regular**: Fast nearest-neighbor downsampling for classic pixel art
 - **Neural**: AI-powered artistic pixelization using PyTorch models
-- **Pixel Snapper**: Recover an uneven pixel grid, with automatic or manual source cell size and configurable Median Cut, K-means, or Octree color reduction (still images)
+- **Pixel Snapper**: Recover pixel grids in images, videos, and animated GIFs, with automatic/manual sizing and configurable color reduction
 - **Pixelization Editor**: Manually align, sample, and edit a pixel grid
 
 ### 13 Dithering Algorithms
@@ -174,9 +174,25 @@ You can then dither it, export it, or open the separate Pixelization Editor,
 which uses the snapped image as its source. The editor retains its existing
 alpha-cutoff and manual-conversion behavior.
 
-Pixel Snapper currently supports still images and CLI image batches. Video
-snapping is unavailable because independent frame detection can produce grid
-jitter and changing dimensions.
+For videos and animated GIFs, the same dialog analyzes representative frames
+and locks one fractional grid and color strategy for the entire clip. Preview
+and export use that same plan, including any edited colors. **Apply to Video**
+works directly after applying Snapper; an additional dithering pass is optional.
+Auto preserves small source palettes and retains full sampled RGB colors for
+videos with more shades, avoiding forced palette banding. The suggested palette
+becomes active if you edit it. GIF output uses a shared palette of up to 256 colors.
+You can choose a manual color count or source cell size instead.
+
+Animated GIFs loaded through either file picker are recognized as animations.
+GIF exports stream frames with their original durations, loop setting, and
+binary transparency. GIF input can also export as MP4. MP4 exports preserve
+the streaming pipeline's frame-rate, audio/subtitle, cancellation, and failure
+cleanup behavior. Odd logical dimensions are edge-padded for video codecs;
+integer upscaling preserves the recovered pixel grid.
+
+Clip-wide settings work best on a consistent grid. Clips with changing scenes,
+camera scale, or heavy noise may need a manual size or separate processing.
+See `examples/video_snapper.json` for a CLI starting point.
 
 The approach is inspired by [Sprite Fusion Pixel Snapper](https://github.com/Hugo-Dz/spritefusion-pixel-snapper)
 by Hugo Duprez. See [third-party notices](docs/pixel-snapper-notice.txt).

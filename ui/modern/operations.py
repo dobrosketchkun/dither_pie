@@ -120,6 +120,10 @@ class Operations:
                 initialdir=self.config.get_last_path('image'),
                 filetypes=[('Images', '*.png *.jpg *.jpeg *.webp *.gif *.bmp *.tiff'), ('All files', '*.*')])
         if path:
+            from video_snapper import is_animated_gif
+            if is_animated_gif(path):
+                self.load_video(path)
+                return
             self._begin_image_job(lambda: read_image(path),
                 lambda image: self._source_loaded(image, path), 'Loading image…')
 
@@ -127,7 +131,7 @@ class Operations:
         if path is None:
             path = filedialog.askopenfilename(parent=self,
                 initialdir=self.config.get_last_path('video'),
-                filetypes=[('Videos', '*.mp4 *.avi *.mov *.mkv *.webm'), ('All files', '*.*')])
+                filetypes=[('Videos / animations', '*.mp4 *.avi *.mov *.mkv *.webm *.gif'), ('All files', '*.*')])
         if not path:
             return
         def compute():
@@ -189,6 +193,7 @@ class Operations:
                     else pixelize_regular(source, size))
         def done(image):
             self.pixelized_image = image
+            self._snapper_plan = None
             self.dithered_image = None
             self.last_palette = self._rendered_request = None
             self._preview_enabled_for_source = False
@@ -236,12 +241,13 @@ class Operations:
         self.set_status('Pixelization editor applied')
 
     def _on_pixel_snapper(self):
-        if self.current_image is None or self.is_video or self._image_busy or self._video_busy:
-            self.set_status('Load a still image to use Pixel Snapper', 'warn')
+        if self.current_image is None or self._image_busy or self._video_busy:
+            self.set_status('Load an image or video to use Pixel Snapper', 'warn')
             return
         self._cancel_preview()
         from .pixel_snapper import ModernPixelSnapperDialog
-        dialog = ModernPixelSnapperDialog(self, self.current_image, config=self.config)
+        options = {'video_path': self.video_path} if self.is_video else {}
+        dialog = ModernPixelSnapperDialog(self, self.current_image, config=self.config, **options)
         self.wait_window(dialog)
         if dialog.result_image is None:
             return
@@ -250,6 +256,7 @@ class Operations:
         self.pixelization_cache = {'method': 'snapper', 'max_size': None,
                                   'source_hash': self._compute_image_hash(self.current_image)}
         self._pixelize_spec = None
+        self._snapper_plan = dialog.result_plan
         self.dithered_image = self.last_palette = self._rendered_request = None
         self._preview_enabled_for_source = self._preview_dirty = False
         self.show_view('Pixelized')
@@ -283,19 +290,23 @@ class Operations:
         self._commit_numbers()
         if self._video_busy:
             return
-        if not self.video_path or not self.last_palette or self._preview_dirty:
-            self.set_status('Generate a current dithered preview before exporting video', 'warn')
+        plan = getattr(self, '_snapper_plan', None)
+        if not self.video_path or (not self.last_palette and plan is None) or self._preview_dirty:
+            self.set_status('Apply Snapper or generate a dithered preview before exporting video', 'warn')
             return
         self._commit_numbers()
+        animated_gif = str(self.video_path).lower().endswith('.gif')
+        extension = '.gif' if animated_gif else '.mp4'
+        formats = [('GIF animation', '*.gif'), ('MP4 video', '*.mp4')] if animated_gif else [('MP4 video', '*.mp4')]
         path = filedialog.asksaveasfilename(parent=self,
-            initialdir=self.config.get_last_path('save'), defaultextension='.mp4',
-            initialfile=self._generate_video_filename(), filetypes=[('MP4 video', '*.mp4')])
+            initialdir=self.config.get_last_path('save'), defaultextension=extension,
+            initialfile=str(Path(self._generate_video_filename()).with_suffix(extension)), filetypes=formats)
         if not path:
             return
         self.config.update_last_path('save', path)
         source = self.video_path
         request = self._rendered_request
-        palette = list(self.last_palette)
+        palette = list(self.last_palette) if self.last_palette else None
         spec = self._pixelize_spec
         multiplier = int(self.resize_multiplier_entry.get()) if self.final_resize_var.get() else None
         workers = self.workers.get()
@@ -310,8 +321,9 @@ class Operations:
             self._progress.put((fraction, message))
         def compute():
             processor = VideoProcessor(workers, progress)
-            return processor.process_video_streaming(source, path, request.ditherer(palette),
-                pixelize_func=spec, final_resize_multiplier=multiplier)
+            options = {'snapper_plan': plan} if plan is not None else {}
+            return processor.process_video_streaming(source, path, request.ditherer(palette) if request else None,
+                pixelize_func=spec, final_resize_multiplier=multiplier, **options)
         def done(ok):
             self._video_busy = False
             self.status_bar.hide_progress()
@@ -332,6 +344,6 @@ class Operations:
             widget.configure(state='normal' if ready else 'disabled')
         self.btn_pixelize_neural.configure(state='normal' if ready and not self.source_has_alpha else 'disabled')
         self.btn_pixelize_editor.configure(state='normal' if ready and not self.is_video else 'disabled')
-        self.btn_pixel_snapper.configure(state='normal' if ready and not self.is_video else 'disabled')
+        self.btn_pixel_snapper.configure(state='normal' if ready and not self._video_busy else 'disabled')
         self.random_frame_button.configure(state='normal' if ready and self.is_video else 'disabled')
         self.apply_video_button.configure(state='normal' if ready and self.is_video and not self._video_busy else 'disabled')

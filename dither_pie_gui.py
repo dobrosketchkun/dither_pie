@@ -166,6 +166,7 @@ class DitheringApp(ctk.CTk):
     
     def _update_pixelization_cache(self, method: PixelizeMethod, max_size: int):
         """Update the pixelization cache after successful pixelization."""
+        self._snapper_plan = None
         if self.current_image:
             self.pixelization_cache = {
                 "method": method,
@@ -181,6 +182,7 @@ class DitheringApp(ctk.CTk):
             "source_hash": None
         }
         self.pixelized_image = None
+        self._snapper_plan = None
     
     def _update_resize_preview(self):
         """Update the resize preview label showing resulting dimensions."""
@@ -499,9 +501,9 @@ class DitheringApp(ctk.CTk):
 
         The neural model is 3-channel (models/pixelization.py converts to RGB),
         so it cannot carry alpha at all. Rather than silently flattening, the
-        option is withdrawn. Videos are always eligible - FFmpeg frames are RGB.
+        option is withdrawn. Opaque video frames remain eligible.
         """
-        if self.source_has_alpha and not self.is_video:
+        if self.source_has_alpha:
             self.btn_pixelize_neural.configure(state="disabled")
         else:
             self.btn_pixelize_neural.configure(state="normal")
@@ -532,7 +534,7 @@ class DitheringApp(ctk.CTk):
         self.btn_load_video.configure(state="normal")
         self.random_frame_button.configure(state="normal")
         self.btn_pixelize.configure(state="normal")
-        self.btn_pixel_snapper.configure(state="disabled" if self.is_video else "normal")
+        self.btn_pixel_snapper.configure(state="normal")
         # Not unconditional: this runs after every palette selection, so a plain
         # re-enable here would silently undo the transparency gating.
         self._update_neural_button_state()
@@ -648,6 +650,10 @@ class DitheringApp(ctk.CTk):
         if not filepath:
             return
         
+        from video_snapper import is_animated_gif
+        if is_animated_gif(filepath):
+            self.load_video(filepath)
+            return
         # Remember this directory
         self.config.update_last_path("image", filepath)
         self.config.add_recent_file(filepath)
@@ -689,16 +695,13 @@ class DitheringApp(ctk.CTk):
         except Exception as e:
             messagebox.showerror("Error", f"Failed to load image:\n{e}")
     
-    def load_video(self):
+    def load_video(self, filepath=None):
         """Load a video file (first frame for preview)."""
         initial_dir = self.config.get_last_path("video")
-        filepath = filedialog.askopenfilename(
-            initialdir=initial_dir,
-            filetypes=[
-                ("Video files", "*.mp4 *.avi *.mov *.mkv"),
-                ("All files", "*.*")
-            ]
-        )
+        if filepath is None:
+            filepath = filedialog.askopenfilename(
+                initialdir=initial_dir,
+                filetypes=[("Video / animation files", "*.mp4 *.avi *.mov *.mkv *.gif"), ("All files", "*.*")])
         
         if not filepath:
             return
@@ -708,22 +711,14 @@ class DitheringApp(ctk.CTk):
         self.config.add_recent_file(filepath)
         
         try:
-            # Extract first frame for preview
-            with tempfile.TemporaryDirectory() as tmpdir:
-                frame_path = os.path.join(tmpdir, "frame.png")
-                cmd = [
-                    "ffmpeg", "-i", filepath,
-                    "-vframes", "1",
-                    frame_path
-                ]
-                subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
-                
-                self.current_image = Image.open(frame_path).convert('RGB')
+            from video_snapper import read_clip_frame
+            info = self.video_processor.get_video_info(filepath)
+            self.current_image = read_clip_frame(filepath, info)
 
             self.dithered_image = None
             self.is_video = True
             # Video frames come out of FFmpeg as RGB - never any alpha to lose.
-            self.source_has_alpha = False
+            self.source_has_alpha = has_actual_transparency(self.current_image)
             self._update_neural_button_state()
             self.video_path = filepath
             self.display_state = "current"
@@ -738,7 +733,7 @@ class DitheringApp(ctk.CTk):
             self.apply_video_button.grid()
             self.random_frame_button.grid()
             self.btn_pixelize_editor.configure(state="disabled")
-            self.btn_pixel_snapper.configure(state="disabled")
+            self.btn_pixel_snapper.configure(state="normal")
             
             self.image_viewer.set_image(self.current_image, update=False)
             self.fit_to_window()
@@ -889,15 +884,17 @@ class DitheringApp(ctk.CTk):
 
     def _on_pixel_snapper(self):
         """Open the standalone snapper; Apply replaces only the processed stage."""
-        if self.current_image is None or self.is_video:
-            messagebox.showinfo('Pixel Snapper', 'Load a still image to use Pixel Snapper.', parent=self)
+        if self.current_image is None:
+            messagebox.showinfo('Pixel Snapper', 'Load an image or video to use Pixel Snapper.', parent=self)
             return
         from ui.pixel_snapper import PixelSnapperDialog
-        dialog = PixelSnapperDialog(self, self.current_image, config=self.config)
+        options = {'video_path': self.video_path} if self.is_video else {}
+        dialog = PixelSnapperDialog(self, self.current_image, config=self.config, **options)
         self.wait_window(dialog)
         if dialog.result_image is None:
             return
         self.pixelized_image = dialog.result_image
+        self._snapper_plan = dialog.result_plan
         self.last_pixelization_method = PixelizeMethod.SNAPPER
         self.dithered_image = self.last_palette = None
         self.pixelization_cache = {'method': 'snapper', 'max_size': None,
@@ -1414,7 +1411,7 @@ class DitheringApp(ctk.CTk):
 
     def _apply_to_video_workflow(self):
         """Handle the full video processing workflow - shows save dialog and processes."""
-        if not self.last_palette or not self.dithered_image:
+        if (not self.last_palette or not self.dithered_image) and getattr(self, '_snapper_plan', None) is None:
             messagebox.showwarning("No Palette", 
                                  "Please apply dithering to preview frame first to select a palette.")
             return
@@ -1431,11 +1428,13 @@ class DitheringApp(ctk.CTk):
         default_video_name = self._generate_video_filename()
         
         initial_dir = self.config.get_last_path("save")
+        animated_gif = str(self.video_path).lower().endswith('.gif')
+        extension = '.gif' if animated_gif else '.mp4'
         output_path = filedialog.asksaveasfilename(
             initialdir=initial_dir,
-            defaultextension=".mp4",
-            initialfile=default_video_name,
-            filetypes=[("Video files", "*.mp4"), ("All files", "*.*")]
+            defaultextension=extension,
+            initialfile=str(Path(default_video_name).with_suffix(extension)),
+            filetypes=([("GIF animation", "*.gif"), ("MP4 video", "*.mp4")] if animated_gif else [("MP4 video", "*.mp4")])
         )
         
         if not output_path:
@@ -1454,47 +1453,53 @@ class DitheringApp(ctk.CTk):
             return
         
         self.status_bar.set_status("Processing video (check console for progress)...", spinning=True)
+
+        # Capture every Tk setting on the UI thread, including Snapper-only
+        # export, which does not require an additional dithering operation.
+        plan = getattr(self, '_snapper_plan', None)
+        palette = list(self.last_palette) if self.last_palette else None
+        gamma = self.last_gamma
+        mode_params = dict(self.dither_parameters.get(dither_mode.value, {}))
+        method = self.last_pixelization_method
+        has_pixelized = self.pixelized_image is not None
+        try:
+            multiplier = int(self.resize_multiplier_entry.get()) if self.final_resize_var.get() else None
+            if multiplier is not None and multiplier < 1:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror('Invalid Input', 'Upscale multiplier must be a positive integer.')
+            return
+        source_path = self.video_path
         
         def process():
-            # Get custom parameters for this mode
-            mode_params = self.dither_parameters.get(dither_mode.value, {})
-            
             # Create ditherer
             ditherer = ImageDitherer(
                 num_colors=num_colors,
                 dither_mode=dither_mode,
-                palette=self.last_palette,
-                use_gamma=self.last_gamma,
+                palette=palette,
+                use_gamma=gamma,
                 dither_params=mode_params
-            )
+            ) if palette is not None else None
             
             # Create pixelize function if pixelized image exists
             # Note: Can't use lambdas here due to multiprocessing pickle issues
             pixelize_func = None
-            if self.pixelized_image:
-                if self.last_pixelization_method == PixelizeMethod.NEURAL:
+            if has_pixelized and plan is None:
+                if method == PixelizeMethod.NEURAL:
                     # Neural uses single-process mode (slower but prevents memory issues)
                     pixelize_func = (PixelizeMethod.NEURAL.value, max_size)
                 else:
                     # Regular uses multi-process mode (fast)
                     pixelize_func = (PixelizeMethod.REGULAR.value, max_size)
             
-            # Get final resize parameters
-            final_resize_enabled = self.final_resize_var.get()
-            final_resize_multiplier = None
-            if final_resize_enabled:
-                try:
-                    final_resize_multiplier = int(self.resize_multiplier_entry.get())
-                except:
-                    final_resize_multiplier = None
-            
             # Process video
             success = self.video_processor.process_video_streaming(
-                self.video_path,
+                source_path,
                 output_path,
                 ditherer,
                 pixelize_func=pixelize_func,
-                final_resize_multiplier=final_resize_multiplier
+                final_resize_multiplier=multiplier,
+                **({'snapper_plan': plan} if plan is not None else {})
             )
             
             # Show result

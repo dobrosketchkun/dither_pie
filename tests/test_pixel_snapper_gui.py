@@ -20,6 +20,112 @@ from utils import PaletteManager
 
 
 class SnapperGUITests(unittest.TestCase):
+    def test_full_color_video_palette_edit_and_reset_wait_for_preview(self):
+        from pixel_snapper import SnapSettings
+        from video_snapper import VideoSnapPlan
+        def scenario(app, modern, errors):
+            source = app.current_image
+            plan = VideoSnapPlan(source.size, tuple(range(0, source.width + 1, 4)),
+                                 tuple(range(0, source.height + 1, 4)), 4,
+                                 ((20, 60, 90), (200, 50, 80)), SnapSettings(pixel_size=4),
+                                 preserve_colors=True)
+            dialog_type = ModernPixelSnapperDialog if modern else PixelSnapperDialog
+            with patch('video_snapper.analyze_video_snap', return_value=plan):
+                dialog = dialog_type(app, source, config=app.config, video_path='gradient.mp4')
+                self.finish_dialog(app, dialog)
+            self.assertTrue(dialog._preview_video_plan.preserve_colors)
+            self.assertIn('original', dialog.auto_colors_check.cget('text'))
+            self.assertIn('Suggested', dialog.palette_label.cget('text'))
+            dialog._set_palette_color(0, (1, 2, 3))
+            self.assertIsNone(dialog.preview_result)
+            dialog._preview()
+            self.finish_dialog(app, dialog)
+            self.assertFalse(dialog._preview_video_plan.preserve_colors)
+            self.assertIn('Palette', dialog.palette_label.cget('text'))
+            dialog._reset_palette()
+            self.assertIsNone(dialog.preview_result)
+            dialog._preview()
+            self.finish_dialog(app, dialog)
+            self.assertTrue(dialog._preview_video_plan.preserve_colors)
+            self.assertIn('Suggested', dialog.palette_label.cget('text'))
+            dialog.close()
+        for modern in (False, True):
+            with self.subTest(modern=modern):
+                self.run_design(modern, scenario)
+
+    def test_animated_gif_snapper_preview_and_export_in_both_designs(self):
+        from test_video_snapper import make_gif
+        from video_snapper import gif_info
+        def scenario(app, modern, errors):
+            source = Path(app.config.config_file).parent / 'animation.gif'
+            make_gif(source)
+            if modern:
+                app.load_image(str(source))
+                deadline = time.monotonic() + 20
+                while app._image_jobs._running or app._image_jobs._pending:
+                    self.assertLess(time.monotonic(), deadline)
+                    app.update()
+                    time.sleep(.01)
+            else:
+                with patch('tkinter.filedialog.askopenfilename', return_value=str(source)):
+                    app.load_image()
+            self.assertTrue(app.is_video)
+            self.assertEqual(app.btn_pixel_snapper.cget('state'), 'normal')
+            deadline = time.monotonic() + 20
+            def apply_ready():
+                dialogs = [child for child in app.winfo_children()
+                           if isinstance(child, (PixelSnapperDialog, ModernPixelSnapperDialog))]
+                if dialogs and dialogs[0].preview_result is not None:
+                    dialog = dialogs[0]
+                    self.assertIsNotNone(dialog._base_video_plan)
+                    if not getattr(dialog, '_video_edit_tested', False):
+                        dialog._video_edit_tested = True
+                        dialog._original_video_plan = dialog._base_video_plan
+                        dialog._set_palette_color(0, (3, 4, 5))
+                        self.assertIsNone(dialog.preview_result)
+                        dialog._preview()
+                        app.after(20, apply_ready)
+                        return
+                    self.assertIs(dialog._base_video_plan, dialog._original_video_plan)
+                    dialog._apply()
+                elif time.monotonic() < deadline:
+                    app.after(20, apply_ready)
+                elif dialogs:
+                    errors.append(('Video preview timeout', dialogs[0].status.cget('text')))
+                    dialogs[0].close()
+            app.after(20, apply_ready)
+            app._on_pixel_snapper()
+            self.assertIsNotNone(app._snapper_plan)
+            self.assertIsNone(app.last_palette, 'Snapper export must not require extra dithering')
+            output = source.parent / 'export.gif'
+            class ImmediateThread:
+                def __init__(self, target, **kwargs):
+                    self.target = target
+                def start(self):
+                    self.target()
+            with patch('tkinter.filedialog.asksaveasfilename', return_value=str(output)), \
+                    patch('tkinter.messagebox.showinfo'), patch('tkinter.messagebox.showerror') as error:
+                if modern:
+                    app._apply_to_video_workflow()
+                    deadline = time.monotonic() + 20
+                    while app._video_jobs._running or app._video_jobs._pending:
+                        self.assertLess(time.monotonic(), deadline)
+                        app.update()
+                        time.sleep(.01)
+                else:
+                    with patch('dither_pie_gui.threading.Thread', ImmediateThread):
+                        app._apply_to_video_workflow()
+                    app.update()
+                error.assert_not_called()
+            self.assertTrue(output.exists())
+            self.assertEqual(gif_info(output)['durations'], (20, 70, 40))
+            with Image.open(output) as animation:
+                animation.seek(1)
+                self.assertEqual(animation.convert('RGBA').getpixel((3, 3)), (3, 4, 5, 255))
+        for modern in (False, True):
+            with self.subTest(modern=modern):
+                self.run_design(modern, scenario)
+
     def test_auto_color_count_and_manual_override_wait_for_update(self):
         def scenario(app, modern, errors):
             # Older preferences stored only a manual count. It must no longer

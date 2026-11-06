@@ -35,6 +35,9 @@ class VideoProcessor:
 
     def get_video_info(self, video_path: str) -> dict:
         """Read named ffprobe fields; never invent dimensions or a frame rate."""
+        if Path(video_path).suffix.lower() == '.gif':
+            from video_snapper import gif_info
+            return gif_info(video_path)
         command = [
             'ffprobe', '-v', 'error', '-select_streams', 'v:0',
             '-show_entries',
@@ -52,7 +55,8 @@ class VideoProcessor:
                                 ditherer: Optional[ImageDitherer],
                                 pixelize_func: Optional[Tuple[str, int]] = None,
                                 batch_size: int = 15,
-                                final_resize_multiplier: Optional[int] = None) -> bool:
+                                final_resize_multiplier: Optional[int] = None,
+                                snapper_plan=None, snapper_settings=None) -> bool:
         """Stream RGB frames in bounded batches through one persistent pool.
 
         pixelize_func is the legacy (method, max_size) tuple. Neural inference
@@ -75,10 +79,28 @@ class VideoProcessor:
             info = self.get_video_info(str(source))
             size = (info['width'], info['height'])
             rate = info['fps_fraction']
+            input_mode = 'RGBA' if info.get('has_alpha') else 'RGB'
             method, max_size = pixelize_func if pixelize_func is not None else (None, 64)
+            if snapper_plan is not None or snapper_settings is not None:
+                method = PixelizeMethod.SNAPPER.value
             if method not in (None, PixelizeMethod.NONE.value, PixelizeMethod.REGULAR.value,
-                              PixelizeMethod.NEURAL.value):
+                              PixelizeMethod.NEURAL.value, PixelizeMethod.SNAPPER.value):
                 raise ValueError(f'Unknown pixelization method: {method}')
+            if method == PixelizeMethod.SNAPPER.value:
+                if snapper_plan is None:
+                    from video_snapper import analyze_video_snap
+                    snapper_plan = analyze_video_snap(str(source), snapper_settings,
+                        lambda f, text: self._report_progress(.01 + .08 * f, text))
+                if tuple(snapper_plan.source_size) != size:
+                    raise ValueError('Snapper plan does not match the video dimensions')
+            if destination.suffix.lower() == '.gif':
+                if source.suffix.lower() != '.gif':
+                    raise ValueError('GIF export currently requires an animated GIF source')
+                from gif_processor import process_gif
+                return process_gif(source, destination, ditherer, method, max_size,
+                                   final_resize_multiplier, snapper_plan, self._report_progress)
+            if method == PixelizeMethod.NEURAL.value and input_mode == 'RGBA':
+                raise ValueError('Neural pixelization cannot preserve animation transparency')
             neural = NeuralPixelizer() if method == PixelizeMethod.NEURAL.value else None
             destination.parent.mkdir(parents=True, exist_ok=True)
             self._report_progress(0.0, 'Starting streaming video processing...')
@@ -92,20 +114,20 @@ class VideoProcessor:
                     decode_command = [
                         'ffmpeg', '-nostdin', '-v', 'error', '-i', str(source),
                         '-map', '0:v:0', '-an', '-sn', '-dn',
-                        '-vf', f'fps={rate}', '-pix_fmt', 'rgb24', '-f', 'rawvideo', 'pipe:1',
+                        '-vf', f'fps={rate}', '-pix_fmt', 'rgba' if input_mode == 'RGBA' else 'rgb24', '-f', 'rawvideo', 'pipe:1',
                     ]
                     decoder = subprocess.Popen(decode_command, stdin=subprocess.DEVNULL,
                                                stdout=subprocess.PIPE, stderr=decode_errors,
                                                **_process_options())
                     resources.callback(_stop_process, decoder)
-                    frame_bytes = size[0] * size[1] * 3
+                    frame_bytes = size[0] * size[1] * len(input_mode)
                     first_data = _read_frame(decoder.stdout, frame_bytes)
                     if first_data is None:
                         _check_process(decoder, decode_errors, 'Decoding')
                         raise ValueError('No frames decoded from video')
-                    first_image = Image.frombytes('RGB', size, first_data)
+                    first_image = Image.frombytes(input_mode, size, first_data)
                     first = _process_frame_image(first_image, ditherer, method, max_size,
-                                                 final_resize_multiplier, neural)
+                                                 final_resize_multiplier, neural, snapper_plan)
                     output_size = first.size
                     # Processing the first frame also initializes any automatic
                     # palette before the ditherer is sent to worker processes.
@@ -129,7 +151,7 @@ class VideoProcessor:
                     if neural is None and self.num_workers > 1:
                         pool = resources.enter_context(Pool(
                             processes=self.num_workers, initializer=_init_frame_worker,
-                            initargs=(size, output_size, ditherer, method, max_size, final_resize_multiplier),
+                            initargs=(size, output_size, ditherer, method, max_size, final_resize_multiplier, snapper_plan, input_mode),
                         ))
                     processed = 1
                     try:
@@ -141,9 +163,9 @@ class VideoProcessor:
                             else:
                                 results = []
                                 for data in batch:
-                                    frame = Image.frombytes('RGB', size, data)
+                                    frame = Image.frombytes(input_mode, size, data)
                                     result = _process_frame_image(frame, ditherer, method, max_size,
-                                                                  final_resize_multiplier, neural)
+                                                                  final_resize_multiplier, neural, snapper_plan)
                                     if result.size != output_size:
                                         raise ValueError('Processed frame dimensions changed')
                                     results.append(result.tobytes())
@@ -250,13 +272,27 @@ def _frame_batches(stream, frame_bytes, batch_size):
         yield batch
 
 
-def _process_frame_image(image, ditherer, method=None, max_size=64, multiplier=None, neural=None):
-    if method == PixelizeMethod.NEURAL.value:
+def _process_frame_image(image, ditherer, method=None, max_size=64, multiplier=None, neural=None, snapper_plan=None):
+    if method == PixelizeMethod.SNAPPER.value:
+        if snapper_plan is None:
+            raise ValueError('Video Snapper requires a clip plan')
+        image = snapper_plan.render(image)
+    elif method == PixelizeMethod.NEURAL.value:
         image = (neural or NeuralPixelizer()).pixelize(image, max_size)
     elif method == PixelizeMethod.REGULAR.value:
         image = pixelize_regular(image, max_size)
     if ditherer is not None:
         image = ditherer.apply_dithering(image)
+    if method == PixelizeMethod.SNAPPER.value:
+        if multiplier:
+            image = image.resize((image.width * multiplier, image.height * multiplier), Image.Resampling.NEAREST)
+        # Pad odd logical dimensions with the edge color; never stretch the
+        # recovered grid merely to satisfy a yuv420p encoder.
+        if image.width % 2 or image.height % 2:
+            import numpy as np
+            data = np.asarray(image.convert('RGB'))
+            image = Image.fromarray(np.pad(data, ((0, image.height % 2), (0, image.width % 2), (0, 0)), mode='edge'))
+        return image.convert('RGB')
     # The encoder always requires even dimensions, including when resizing and
     # pixelization are both disabled.
     if multiplier or image.width % 2 or image.height % 2:
@@ -267,15 +303,15 @@ def _process_frame_image(image, ditherer, method=None, max_size=64, multiplier=N
 _FRAME_SETTINGS = None
 
 
-def _init_frame_worker(size, output_size, ditherer, method, max_size, multiplier):
+def _init_frame_worker(size, output_size, ditherer, method, max_size, multiplier, snapper_plan=None, input_mode='RGB'):
     global _FRAME_SETTINGS
-    _FRAME_SETTINGS = (size, output_size, ditherer, method, max_size, multiplier)
+    _FRAME_SETTINGS = (size, output_size, ditherer, method, max_size, multiplier, snapper_plan, input_mode)
 
 
 def _process_stream_frame(data):
-    size, output_size, ditherer, method, max_size, multiplier = _FRAME_SETTINGS
-    image = Image.frombytes('RGB', size, data)
-    result = _process_frame_image(image, ditherer, method, max_size, multiplier)
+    size, output_size, ditherer, method, max_size, multiplier, snapper_plan, input_mode = _FRAME_SETTINGS
+    image = Image.frombytes(input_mode, size, data)
+    result = _process_frame_image(image, ditherer, method, max_size, multiplier, snapper_plan=snapper_plan)
     if result.size != output_size:
         raise ValueError('Processed frame dimensions changed')
     return result.tobytes()

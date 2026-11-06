@@ -40,6 +40,16 @@ python ../dither_pie.py image_snapper.json your_sprite.png
 
 ## Video Processing
 
+### `video_snapper.json`
+Clip-wide automatic grid and palette recovery with optional integer upscaling.
+Dithering is disabled in this example. An animated GIF input override produces
+an animated GIF output with its original timing and loop setting.
+
+```bash
+python ../dither_pie.py video_snapper.json your_pixel_art_video.mp4
+python ../dither_pie.py video_snapper.json your_animation.gif
+```
+
 ### `video_basic.json`
 Process a video with pixelization and dithering. Audio is preserved.
 ```bash

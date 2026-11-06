@@ -12,10 +12,12 @@ ALGORITHMS = {'Median Cut': 'median_cut', 'K-means': 'kmeans', 'Octree': 'octree
 
 
 class SnapperContents:
-    def _initialize_snapper(self, source, config):
+    def _initialize_snapper(self, source, config, video_path=None):
         self.source_image = source.copy()
         self.config_mgr = config
         self.result_image = self.result = self.preview_result = None
+        self.video_path = video_path
+        self.result_plan = self._preview_video_plan = self._base_video_plan = None
         self._jobs = LatestPreviewJob()
         self._poll_id = None
         self._snap_closed = False
@@ -141,7 +143,9 @@ class SnapperContents:
         self._palette_settings_changed()
 
     def _show_palette(self):
-        self.palette_label.configure(text=f'Palette ({len(self.palette_colors)})')
+        suggested = (self._base_video_plan is not None and self._base_video_plan.preserve_colors
+                     and self._edited_palette is None)
+        self.palette_label.configure(text=f'{"Suggested" if suggested else "Palette"} ({len(self.palette_colors)})')
         self._selected_color = max(0, min(self._selected_color, len(self.palette_colors) - 1))
         for child in self.palette_frame.winfo_children():
             child.destroy()
@@ -214,16 +218,26 @@ class SnapperContents:
         except ValueError as error:
             self.status.configure(text=str(error))
             return
-        self.status.configure(text='Recovering grid and reducing colors…')
+        self.status.configure(text='Analyzing clip grid and shared palette…' if self.video_path
+                              else 'Recovering grid and reducing colors…')
         palette = self._edited_palette
         custom = self._palette_custom
         cached = self._base_preview
+        cached_plan = self._base_video_plan
         def compute():
+            if self.video_path:
+                from video_snapper import analyze_video_snap
+                plan = (cached_plan if cached and cached[0] == settings and cached_plan is not None
+                        else analyze_video_snap(self.video_path, settings))
+                base = plan.preview(self.source_image)
+                edited = plan.with_palette(palette, custom) if palette is not None else plan
+                return base, edited.preview(self.source_image), plan, edited
             base = cached[1] if cached and cached[0] == settings else snap_pixels(self.source_image, settings)
             result = base if palette is None else apply_snap_palette(self.source_image, base, palette, custom=custom)
-            return base, result
+            return base, result, None, None
         def done(value):
-            base, result = value
+            base, result, plan, edited = value
+            self._base_video_plan, self._preview_video_plan = plan, edited
             self._base_preview = (settings, base)
             self.preview_result = result
             self._preview_settings = settings
@@ -231,7 +245,11 @@ class SnapperContents:
             self.palette_colors = list(result.palette)
             self._show_palette()
             if self.auto_colors_var.get():
-                self.auto_colors_check.configure(text=f'Auto color count ({len(base.palette)})')
+                if plan and plan.preserve_colors:
+                    color_text = 'Auto colors (original)' if edited.preserve_colors else 'Auto colors (edited)'
+                else:
+                    color_text = f'Auto color count ({len(base.palette)})'
+                self.auto_colors_check.configure(text=color_text)
             text = f'{result.image.width} × {result.image.height} pixels · source cell ≈ {result.pixel_size:g}px'
             if result.warning:
                 text += '\n' + result.warning
@@ -291,6 +309,7 @@ class SnapperContents:
             return
         self.result = self.preview_result
         self.result_image = self.result.image
+        self.result_plan = self._preview_video_plan
         if self.config_mgr:
             self.config_mgr.set('pixel_snapper', 'auto_colors', value=self.auto_colors_var.get())
             for key in ('num_colors', 'quantizer', 'pixel_size'):
@@ -317,7 +336,7 @@ class SnapperContents:
 
 
 class PixelSnapperDialog(SnapperContents, ctk.CTkToplevel):
-    def __init__(self, parent, source, config=None):
+    def __init__(self, parent, source, config=None, video_path=None):
         super().__init__(parent)
         self.title('Pixel Snapper')
         self.geometry('1100x650')
@@ -329,6 +348,6 @@ class PixelSnapperDialog(SnapperContents, ctk.CTkToplevel):
         self.body.grid(row=0, column=0, sticky='nsew', padx=14, pady=14)
         self.footer = ctk.CTkFrame(self, fg_color='transparent')
         self.footer.grid(row=1, column=0, sticky='ew', padx=14, pady=(0, 14))
-        self._initialize_snapper(source, config)
+        self._initialize_snapper(source, config, video_path)
         self.grab_set()
 

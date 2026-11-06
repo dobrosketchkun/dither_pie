@@ -228,7 +228,7 @@ class SnapperJobTests(unittest.TestCase):
         self.assertIsNone(config['pixelization']['snapper']['num_colors'])
         self.assertIn('auto-colors', generate_output_filename(Path('in.png'), config).name)
 
-    def test_video_rejected_instead_of_silently_skipping_snapper(self):
+    def test_invalid_video_fails_instead_of_silently_skipping_snapper(self):
         from dither_cli import process_single_video
         config = {'input': 'missing.mp4', 'output': 'out.mp4',
                   'pixelization': {'enabled': True, 'method': 'snapper'}}

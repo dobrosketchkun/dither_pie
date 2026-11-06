@@ -46,6 +46,8 @@ it does not validate model weights or GPU behavior.
 | `pixel_snapper.py` | Still-image grid recovery, color reduction, and dominant-cell sampling |
 | `ui/pixel_snapper.py` | Standalone preview/apply/cancel workflow shared by both GUI designs |
 | `video_processor.py` | Frame processing, multiprocessing, and FFmpeg orchestration |
+| `video_snapper.py` | Clip-wide fractional grid/palette analysis and reusable frame plans |
+| `gif_processor.py` | Bounded GIF export with shared palettes, timing, looping, and transparency |
 | `dither_pie_gui.py` | Main window, application state, and workflow coordination |
 | `ui/image_view.py` | Image display, zoom, pan, and comparison |
 | `ui/pixelization_editor.py` | Pixel editor canvas and dialog |

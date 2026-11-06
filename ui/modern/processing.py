@@ -53,6 +53,9 @@ def read_image(path):
 
 
 def read_video_frame(path, info, index=0):
+    if str(path).lower().endswith('.gif'):
+        from video_snapper import read_clip_frame
+        return read_clip_frame(path, info, index)
     rate = float(Fraction(info['fps_fraction']))
     command = ['ffmpeg', '-v', 'error', '-ss', str(index / rate), '-i', str(path),
                '-frames:v', '1', '-f', 'image2pipe', '-vcodec', 'png', '-']

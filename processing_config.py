@@ -178,6 +178,10 @@ def detect_mode(input_path: Path) -> str:
     
     # Check file extension
     ext = input_path.suffix.lower()
+    if ext == '.gif':
+        from video_snapper import is_animated_gif
+        if is_animated_gif(input_path):
+            return 'video'
     
     video_exts = ['.mp4', '.avi', '.mov', '.mkv', '.webm', '.flv', '.wmv']
     image_exts = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp']

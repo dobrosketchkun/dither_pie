@@ -182,8 +182,14 @@ a finite number of at least 1 overrides it (fractional values are supported).
 If detection finds no reliable grid, processing fails with a request for a
 manual size. The result preserves logical grid dimensions, including odd sizes.
 The existing `palette`/`dithering` sections control any subsequent dithering
-independently. Snapper supports still images and image folders; videos are
-explicitly rejected. See `examples/image_snapper.json`.
+independently. Snapper supports images, videos, animated GIFs, and folder batches.
+Videos analyze representative frames once and reuse one fractional grid and
+color strategy for every frame. Video Auto retains small source palettes and
+otherwise preserves sampled RGB colors without a 256-color cap. Manual counts
+still reduce to 1–256 shared colors. Animated GIFs are detected as video jobs;
+GIF output preserves frame durations, loop metadata, and binary transparency.
+GIF input may also export as MP4. See `examples/image_snapper.json` and
+`examples/video_snapper.json`. Additional dithering remains optional.
 
 #### `dithering`
 - **`enabled`**: `true` or `false`

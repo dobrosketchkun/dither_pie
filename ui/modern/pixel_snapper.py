@@ -5,10 +5,10 @@ from . import theme as T
 
 
 class ModernPixelSnapperDialog(SnapperContents, Dialog):
-    def __init__(self, parent, source, config=None):
+    def __init__(self, parent, source, config=None, video_path=None):
         super().__init__(parent, 'Pixel Snapper', icon='grid_fine', size=(1100, 650), resizable=True)
         self.minsize(900, 560)
-        self._initialize_snapper(source, config)
+        self._initialize_snapper(source, config, video_path)
         for button in (self.preview_button, self.apply_button):
             button.configure(fg_color=T.accent(), hover_color=T.accent_hover(), text_color=T.accent_on())
         self.cancel_button.configure(fg_color=T.c('card_alt'), hover_color=T.c('card_hi'), text_color=T.c('text'))

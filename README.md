@@ -18,6 +18,8 @@ A Python application for dithering and pixelizing images and videos, with a desk
 ### Pixelization Methods
 - **Regular**: Fast nearest-neighbor downsampling for classic pixel art
 - **Neural**: AI-powered artistic pixelization using PyTorch models
+- **Pixel Snapper**: Recover an uneven pixel grid, with automatic or manual source cell size and configurable Median Cut, K-means, or Octree color reduction (still images)
+- **Pixelization Editor**: Manually align, sample, and edit a pixel grid
 
 ### 13 Dithering Algorithms
 - **Bayer** - Ordered dithering with configurable matrix size (2x2, 4x4, 8x8, 16x16)
@@ -131,6 +133,41 @@ python dither_pie.py config.json input_image.png
 2. **Pixelize** (optional) → Choose Regular or Neural, set max size
 3. **Apply Dithering** → Select palette and see live preview
 4. **Save Result** → Export as PNG or process full video
+
+### Pixel Snapper (GUI)
+
+Open **Pixel Snapper…** from the modern **Pixelize** tab or the legacy sidebar.
+It opens its own settings and comparison dialog.
+
+1. Use automatic grid detection, or enter a source cell size in pixels (fractional sizes are supported).
+2. Choose a color count from 1–256 and a reduction algorithm: Median Cut, K-means, or Octree.
+3. Click **Update preview** to compare the source with the snapped result. Zoom and pan are synchronized and retained when updating the preview.
+4. Click **Apply** to return the result to the main window. Settings changes require a fresh preview before applying; Cancel leaves the main image untouched.
+
+Click any palette swatch to edit its color. Palette edits, additions, deletions,
+and resets take effect in the image only when you click **Update preview**.
+**Apply** is disabled until that preview is current.
+Changing the color-reduction algorithm or color
+count clears palette edits; **Reset** also restores the generated palette.
+Use **+** to add a color and **−** to delete the selected swatch (at least one
+color remains). The color dialog includes HSV/RGB/HEX controls and **Pick from
+image**: click either preview to sample its actual image color, then confirm
+with **OK**. Escape cancels sampling. Adding or deleting colors remaps the
+source to the edited palette while retaining the detected grid.
+
+Snapping is intended for artwork that already has an implied pixel grid. If
+automatic detection cannot find repeated boundaries, set a manual cell size.
+The result keeps its logical grid dimensions, including odd dimensions.
+You can then dither it, export it, or open the separate Pixelization Editor,
+which uses the snapped image as its source. The editor retains its existing
+alpha-cutoff and manual-conversion behavior.
+
+Pixel Snapper currently supports still images and CLI image batches. Video
+snapping is unavailable because independent frame detection can produce grid
+jitter and changing dimensions.
+
+The approach is inspired by [Sprite Fusion Pixel Snapper](https://github.com/Hugo-Dz/spritefusion-pixel-snapper)
+by Hugo Duprez. See [third-party notices](docs/pixel-snapper-notice.txt).
 
 ### Pixelization Editor (GUI)
 Open **Pixelization Editor** from the sidebar (images only). This dialog lets you position the source image over a square grid, pixelize with the fixed Neighbor method, and edit the result directly.

@@ -28,6 +28,15 @@ Using a predefined palette from `palette.json` (Game Boy DMG in this example).
 python ../dither_pie.py image_custom_palette.json
 ```
 
+### `image_snapper.json`
+Recover a grid from uneven pixel art using automatic cell-size detection and
+16-color Median Cut reduction. Set `pixel_size` to a number for manual sizing,
+or change `quantizer` to `kmeans` or `octree`. Dithering is independently optional.
+
+```bash
+python ../dither_pie.py image_snapper.json your_sprite.png
+```
+
 ## Video Processing
 
 ### `video_basic.json`

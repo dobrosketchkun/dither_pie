@@ -75,6 +75,12 @@ class ConfigManager:
             "spinner_name": "dots"  # Spinner animation style (from spinners.json)
         },
 
+        "pixel_snapper": {
+            "num_colors": 16,
+            "quantizer": "median_cut",
+            "pixel_size": None,
+        },
+
         # Pixelization editor preferences
         "pixelization_editor": {
             "target_size": 64,

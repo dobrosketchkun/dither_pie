@@ -104,6 +104,9 @@ class ColorPickerGrid(ctk.CTkFrame):
         return self.colors
 
 
+PLANE_SIZE = 256
+
+
 class HSVColorPickerDialog(ctk.CTkToplevel):
     """
     A simple HSV color picker used for building custom palettes.

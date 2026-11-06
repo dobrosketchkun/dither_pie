@@ -43,6 +43,8 @@ it does not validate model weights or GPU behavior.
 | `config_manager.py` | Persistent GUI preferences and recent files |
 | `dithering_lib.py` | Dithering strategies, palette reduction, gamma, and alpha handling |
 | `pixelization.py` | Shared regular/neural pixelization used by images and video |
+| `pixel_snapper.py` | Still-image grid recovery, color reduction, and dominant-cell sampling |
+| `ui/pixel_snapper.py` | Standalone preview/apply/cancel workflow shared by both GUI designs |
 | `video_processor.py` | Frame processing, multiprocessing, and FFmpeg orchestration |
 | `dither_pie_gui.py` | Main window, application state, and workflow coordination |
 | `ui/image_view.py` | Image display, zoom, pan, and comparison |

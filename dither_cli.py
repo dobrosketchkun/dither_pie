@@ -325,6 +325,14 @@ def process_single_image(config: Dict[str, Any]) -> bool:
                 logger.info(f"Pixelizing (regular, max_size={max_size})...")
                 processed_image = pixelize_regular(image, max_size)
                 logger.info(f"[green]✓[/] Pixelized to {processed_image.size[0]}x{processed_image.size[1]}")
+            elif method == PixelizeMethod.SNAPPER.value:
+                from pixel_snapper import SnapSettings, snap_pixels
+                settings = SnapSettings(**config['pixelization'].get('snapper', {}))
+                result = snap_pixels(image, settings)
+                processed_image = result.image
+                logger.info(f'Pixel Snapper: {processed_image.width}x{processed_image.height}, cell size {result.pixel_size:g}px')
+                if result.warning:
+                    logger.warning(result.warning)
             elif method == PixelizeMethod.NEURAL.value:
                 # The neural model is 3-channel and cannot carry alpha. Refuse
                 # rather than silently flattening, matching the GUI which
@@ -430,6 +438,11 @@ def process_single_video(config: Dict[str, Any], neural_pixelizer: Optional[Neur
         output_path = Path(config["output"])
 
         logger.info(f"Processing video: [cyan]{input_path.name}[/]")
+
+        if (config['pixelization']['enabled'] and
+                config['pixelization']['method'] == PixelizeMethod.SNAPPER.value):
+            logger.error('Pixel Snapper currently supports still images only; a stable video grid is required.')
+            return False
 
         # Get video info
         video_processor = VideoProcessor()
@@ -559,7 +572,12 @@ def generate_output_filename(input_path: Path, config: Dict[str, Any]) -> Path:
     # Add pixelization info if enabled
     if config["pixelization"]["enabled"]:
         method = config["pixelization"]["method"]
-        if method != PixelizeMethod.NONE.value:
+        if method == PixelizeMethod.SNAPPER.value:
+            snap = config['pixelization'].get('snapper', {})
+            cell = snap.get('pixel_size')
+            size = 'auto' if cell is None else f'{cell:g}px'
+            parts.append(f"snap_{size}_{snap.get('num_colors', 16)}c_{snap.get('quantizer', 'median_cut')}")
+        elif method != PixelizeMethod.NONE.value:
             parts.append(f"pix{config['pixelization']['max_size']}")
     
     # Add dithering info if enabled
@@ -959,7 +977,10 @@ def main():
     logger.info(f"Mode:   [cyan]{config['mode']}[/]")
     
     if config["pixelization"]["enabled"]:
-        logger.info(f"Pixelization: [yellow]{config['pixelization']['method']}[/] (max_size={config['pixelization']['max_size']})")
+        if config['pixelization']['method'] == PixelizeMethod.SNAPPER.value:
+            logger.info(f"Pixelization: [yellow]snapper[/] ({config['pixelization']['snapper']})")
+        else:
+            logger.info(f"Pixelization: [yellow]{config['pixelization']['method']}[/] (max_size={config['pixelization']['max_size']})")
     else:
         logger.info("Pixelization: [dim]disabled[/]")
     

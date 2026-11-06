@@ -290,6 +290,11 @@ class DitheringApp(ctk.CTk):
         self.btn_pixelize_neural.grid(row=row, column=0, pady=5, padx=10, sticky='ew')
         row += 1
 
+        self.btn_pixel_snapper = ctk.CTkButton(
+            self.sidebar, text="Pixel Snapper…", command=self._on_pixel_snapper)
+        self.btn_pixel_snapper.grid(row=row, column=0, pady=(12, 5), padx=10, sticky='ew')
+        row += 1
+
         # Alpha cutoff for the editor's grid sampling. Source pixels fainter
         # than this are treated as absent, so an anti-aliased fringe does not
         # come through as an opaque halo.
@@ -509,6 +514,7 @@ class DitheringApp(ctk.CTk):
         self.btn_pixelize.configure(state="disabled")
         self.btn_pixelize_neural.configure(state="disabled")
         self.btn_pixelize_editor.configure(state="disabled")
+        self.btn_pixel_snapper.configure(state="disabled")
         self.btn_dither.configure(state="disabled")
         self.apply_video_button.configure(state="disabled")
         self.btn_save.configure(state="disabled")
@@ -526,6 +532,7 @@ class DitheringApp(ctk.CTk):
         self.btn_load_video.configure(state="normal")
         self.random_frame_button.configure(state="normal")
         self.btn_pixelize.configure(state="normal")
+        self.btn_pixel_snapper.configure(state="disabled" if self.is_video else "normal")
         # Not unconditional: this runs after every palette selection, so a plain
         # re-enable here would silently undo the transparency gating.
         self._update_neural_button_state()
@@ -668,6 +675,7 @@ class DitheringApp(ctk.CTk):
             self.apply_video_button.grid_remove()
             self.random_frame_button.grid_remove()
             self.btn_pixelize_editor.configure(state="normal")
+            self.btn_pixel_snapper.configure(state="normal")
             self._update_neural_button_state()
 
             self.image_viewer.set_image(self.current_image, update=False)
@@ -730,6 +738,7 @@ class DitheringApp(ctk.CTk):
             self.apply_video_button.grid()
             self.random_frame_button.grid()
             self.btn_pixelize_editor.configure(state="disabled")
+            self.btn_pixel_snapper.configure(state="disabled")
             
             self.image_viewer.set_image(self.current_image, update=False)
             self.fit_to_window()
@@ -878,14 +887,37 @@ class DitheringApp(ctk.CTk):
         
         threading.Thread(target=process, daemon=True).start()
 
+    def _on_pixel_snapper(self):
+        """Open the standalone snapper; Apply replaces only the processed stage."""
+        if self.current_image is None or self.is_video:
+            messagebox.showinfo('Pixel Snapper', 'Load a still image to use Pixel Snapper.', parent=self)
+            return
+        from ui.pixel_snapper import PixelSnapperDialog
+        dialog = PixelSnapperDialog(self, self.current_image, config=self.config)
+        self.wait_window(dialog)
+        if dialog.result_image is None:
+            return
+        self.pixelized_image = dialog.result_image
+        self.last_pixelization_method = PixelizeMethod.SNAPPER
+        self.dithered_image = self.last_palette = None
+        self.pixelization_cache = {'method': 'snapper', 'max_size': None,
+                                  'source_hash': self._compute_image_hash(self.current_image)}
+        self.display_state = 'pixelized'
+        self.image_viewer.set_image(self.pixelized_image, update=False)
+        self.fit_to_window()
+        self._update_resize_preview()
+        self.status_bar.set_status('Pixel Snapper applied')
+
     def _on_pixelization_editor(self):
         """Open pixelization editor dialog."""
         if not self.current_image:
             messagebox.showwarning("No Image", "Please load an image or video first.")
             return
 
+        source = (self.pixelized_image if self.pixelization_cache.get('method') == 'snapper'
+                  else self.current_image)
         dialog = PixelizationEditorDialog(
-            self, self.current_image, config=self.config,
+            self, source, config=self.config,
             alpha_cutoff=self._get_alpha_cutoff()
         )
         self.wait_window(dialog)

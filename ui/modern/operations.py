@@ -161,7 +161,7 @@ class Operations:
         self._update_resize_preview()
         self._refresh_recent()
         self._refresh_palettes()
-        self.set_status(f'Loaded {Path(path).name}')
+        self.set_status('Video loaded' if self.is_video else 'Image loaded')
 
     def load_random_frame(self):
         if not self.is_video or not self._video_info:
@@ -213,7 +213,9 @@ class Operations:
             return
         self._cancel_preview()
         from .editor import ModernPixelizationEditor
-        dialog = ModernPixelizationEditor(self, self.current_image, config=self.config,
+        source = (self.pixelized_image if self.pixelization_cache.get('method') == 'snapper'
+                  else self.current_image)
+        dialog = ModernPixelizationEditor(self, source, config=self.config,
                                            alpha_cutoff=self._get_alpha_cutoff())
         self.wait_window(dialog)
         if dialog.result_image is None:
@@ -232,6 +234,29 @@ class Operations:
         self._refresh_palettes()
         self._refresh_capabilities()
         self.set_status('Pixelization editor applied')
+
+    def _on_pixel_snapper(self):
+        if self.current_image is None or self.is_video or self._image_busy or self._video_busy:
+            self.set_status('Load a still image to use Pixel Snapper', 'warn')
+            return
+        self._cancel_preview()
+        from .pixel_snapper import ModernPixelSnapperDialog
+        dialog = ModernPixelSnapperDialog(self, self.current_image, config=self.config)
+        self.wait_window(dialog)
+        if dialog.result_image is None:
+            return
+        self.pixelized_image = dialog.result_image
+        self.last_pixelization_method = PixelizeMethod.SNAPPER
+        self.pixelization_cache = {'method': 'snapper', 'max_size': None,
+                                  'source_hash': self._compute_image_hash(self.current_image)}
+        self._pixelize_spec = None
+        self.dithered_image = self.last_palette = self._rendered_request = None
+        self._preview_enabled_for_source = self._preview_dirty = False
+        self.show_view('Pixelized')
+        self._update_resize_preview()
+        self._refresh_palettes()
+        self._refresh_capabilities()
+        self.set_status('Pixel Snapper applied')
 
     def _use_original(self):
         self._image_jobs.invalidate()
@@ -307,5 +332,6 @@ class Operations:
             widget.configure(state='normal' if ready else 'disabled')
         self.btn_pixelize_neural.configure(state='normal' if ready and not self.source_has_alpha else 'disabled')
         self.btn_pixelize_editor.configure(state='normal' if ready and not self.is_video else 'disabled')
+        self.btn_pixel_snapper.configure(state='normal' if ready and not self.is_video else 'disabled')
         self.random_frame_button.configure(state='normal' if ready and self.is_video else 'disabled')
         self.apply_video_button.configure(state='normal' if ready and self.is_video and not self._video_busy else 'disabled')

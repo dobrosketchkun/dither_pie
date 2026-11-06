@@ -67,6 +67,8 @@ class ModernGUITests(unittest.TestCase):
         source = self.load()
         app = self.app
         self.assertEqual(app.current_image.tobytes(), source.tobytes())
+        self.assertEqual(app.file_label.cget('text'), 'source.png')
+        self.assertFalse(app.preview_feedback.winfo_ismapped(), 'Loaded filename belongs in the top bar only')
         self.assertEqual(app.btn_pixelize_neural.cget('state'), 'disabled')
         field = next(f for f in app._numbers if f.entry is app.max_size_entry)
         field.var.set(8)

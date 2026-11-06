@@ -155,8 +155,31 @@ This will:
 
 #### `pixelization`
 - **`enabled`**: `true` or `false`
-- **`method`**: `"none"`, `"regular"`, or `"neural"`
-- **`max_size`**: Maximum dimension (integer)
+- **`method`**: `"none"`, `"regular"`, `"neural"`, or `"snapper"`
+- **`max_size`**: Shorter-edge target (integer, at least 2) for Regular/Neural; unused by Snapper
+
+For `"method": "snapper"`, add a `snapper` object inside `pixelization`:
+
+```json
+"pixelization": {
+    "enabled": true,
+    "method": "snapper",
+    "snapper": {
+        "num_colors": 16,
+        "quantizer": "median_cut",
+        "pixel_size": null
+    }
+}
+```
+
+`num_colors` accepts 1–256. `quantizer` accepts `"median_cut"`, `"kmeans"`,
+or `"octree"`. `pixel_size: null` detects the source cell size automatically;
+a finite number of at least 1 overrides it (fractional values are supported).
+If detection finds no reliable grid, processing fails with a request for a
+manual size. The result preserves logical grid dimensions, including odd sizes.
+The existing `palette`/`dithering` sections control any subsequent dithering
+independently. Snapper supports still images and image folders; videos are
+explicitly rejected. See `examples/image_snapper.json`.
 
 #### `dithering`
 - **`enabled`**: `true` or `false`

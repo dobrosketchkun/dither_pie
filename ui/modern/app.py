@@ -197,6 +197,8 @@ class ModernApp(PalettePanel, Operations, WindowChrome, winchrome.StableTitlebar
         self.btn_pixelize = self._button(body, 'Pixelize', self._on_pixelize_regular)
         self.btn_pixelize_neural = self._button(body, 'Neural pixelize', self._on_pixelize_neural)
         self._button(body, 'Use original size', self._use_original)
+        body = self._card(1, 'Pixel Snapper', 'grid_fine')
+        self.btn_pixel_snapper = self._button(body, 'Pixel Snapper…', self._on_pixel_snapper)
         body = self._card(1, 'Pixelization editor', 'pencil')
         self.alpha_cutoff_entry = self._number(body, 'Alpha cutoff', 0, 255,
             self.config.get('defaults', 'alpha_cutoff')).entry
@@ -302,7 +304,6 @@ class ModernApp(PalettePanel, Operations, WindowChrome, winchrome.StableTitlebar
         self.view_seg.place(x=14, y=14)
         self.preview_feedback = ctk.CTkFrame(self.main_frame, fg_color=T.c('surface'),
             corner_radius=T.R_CTRL, border_width=1, border_color=T.c('border'))
-        self.preview_feedback.place(relx=1, x=-14, y=14, anchor='ne')
         self.preview_feedback_label = Label(self.preview_feedback, 'Open an image or video',
             'small', height=18, wraplength=220, justify='left')
         self.preview_feedback_label.pack(padx=10, pady=7)
@@ -335,6 +336,10 @@ class ModernApp(PalettePanel, Operations, WindowChrome, winchrome.StableTitlebar
             self.preview_feedback_label.configure(text=text,
                 text_color=T.c('err') if tone == 'err' else T.c('text'))
             self.preview_activity.stop()
+            if tone in ('busy', 'err', 'warn') or text.startswith('Applied:'):
+                self.preview_feedback.place(relx=1, x=-14, y=14, anchor='ne')
+            else:
+                self.preview_feedback.place_forget()
             if tone == 'busy':
                 self.preview_activity.pack(padx=10, pady=(0, 7))
                 self.preview_activity.start()

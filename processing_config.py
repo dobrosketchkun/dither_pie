@@ -92,6 +92,25 @@ def validate_config(config: Dict[str, Any], config_path: Path, skip_input_check:
     _normalize_integer(pal, 'num_colors', 'palette.num_colors', 1, errors)
     _normalize_integer(resize, 'multiplier', 'final_resize.multiplier', 1, errors)
 
+    if pix['method'] == PixelizeMethod.SNAPPER.value:
+        from pixel_snapper import SnapSettings
+        snap = pix.setdefault('snapper', {})
+        if not isinstance(snap, dict):
+            errors.append("'pixelization.snapper' must be an object/dictionary")
+        else:
+            snap.setdefault('num_colors', 16)
+            snap.setdefault('quantizer', 'median_cut')
+            snap.setdefault('pixel_size', None)
+            _normalize_integer(snap, 'num_colors', 'pixelization.snapper.num_colors', 1, errors)
+            try:
+                if isinstance(snap['pixel_size'], bool):
+                    raise ValueError('Pixel size must be numeric, not boolean.')
+                if snap['pixel_size'] is not None:
+                    snap['pixel_size'] = float(snap['pixel_size'])
+                SnapSettings(**snap)
+            except (TypeError, ValueError) as error:
+                errors.append(f'Invalid Pixel Snapper settings: {error}')
+
     source = pal['source']
     if not isinstance(source, str) or not source:
         errors.append("'palette.source' must be a nonempty string")

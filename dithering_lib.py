@@ -86,6 +86,7 @@ class PixelizeMethod(Enum):
     NONE = "none"
     REGULAR = "regular"
     NEURAL = "neural"
+    SNAPPER = "snapper"
 
 
 class PaletteSource(Enum):

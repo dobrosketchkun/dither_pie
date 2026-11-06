@@ -1,0 +1,15 @@
+{
+  "input": "input.png",
+  "output": "snapped.png",
+  "pixelization": {
+    "enabled": true,
+    "method": "snapper",
+    "snapper": {
+      "pixel_size": null,
+      "num_colors": 16,
+      "quantizer": "median_cut"
+    }
+  },
+  "dithering": {"enabled": false},
+  "final_resize": {"enabled": false, "multiplier": 4}
+}

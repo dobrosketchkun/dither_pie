@@ -73,6 +73,7 @@ class CommandPalette(Modal):
             ('Open image', app.load_image), ('Open video', app.load_video),
             ('Random video frame', app.load_random_frame), ('Pixelize', app._on_pixelize_regular),
             ('Neural pixelize', app._on_pixelize_neural), ('Pixelization editor', app._on_pixelization_editor),
+            ('Pixel Snapper', app._on_pixel_snapper),
             ('Update preview', app._on_apply_dithering), ('Save image', app.save_image),
             ('Process video', app._apply_to_video_workflow), ('Fit image', app.fit_to_window),
             ('Before / after', app.toggle_compare), ('Preferences', app.open_settings)]
